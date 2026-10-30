@@ -20,11 +20,27 @@ async function processNotification(params: {
   }
 
   // Persist immediately in shared Cloud State so both Computador and Celular see it
+  // and the bank balance in "Meus Bancos" automatically adds/subtracts the amount!
   const state = await getCloudState();
   state.transactions = [
     tx,
     ...state.transactions.filter((t) => t.id !== tx.id),
   ];
+
+  if (
+    tx.banco &&
+    !state.banks.some(
+      (b) => b.nome.toLowerCase() === tx.banco!.toLowerCase()
+    )
+  ) {
+    state.banks.push({
+      id: `bank-${Date.now().toString().slice(-4)}`,
+      nome: tx.banco,
+      cor: '#3b82f6',
+      saldoInicial: 0,
+    });
+  }
+
   const saved = await saveCloudState(state);
 
   const targetScriptUrl =
@@ -38,7 +54,10 @@ async function processNotification(params: {
       const res = await fetch(targetScriptUrl, {
         method: 'POST',
         headers: { 'Content-Type': 'text/plain;charset=utf-8' },
-        body: JSON.stringify({ action: 'add', transaction: tx }),
+        body: JSON.stringify({
+          action: 'syncAll',
+          transactions: saved.transactions,
+        }),
         redirect: 'follow',
       });
       syncedToSheet = res.ok;
@@ -66,6 +85,7 @@ export async function GET(request: NextRequest) {
     return NextResponse.json({
       ok: true,
       recent: state.transactions,
+      banks: state.banks,
     });
   }
 

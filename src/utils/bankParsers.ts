@@ -276,12 +276,27 @@ function parseCsvContent(content: string): Transaction[] {
   return results;
 }
 
+export function normalizeBankName(rawBank: string, rawText: string = ''): string {
+  const b = (rawBank || '').toLowerCase().trim();
+  const t = (rawText || '').toLowerCase();
+  if (b.includes('picpay') || t.includes('picpay')) return 'PicPay';
+  if (b.includes('nu') || b.includes('nubank') || t.includes('nubank')) return 'Nubank';
+  if (b.includes('itau') || b.includes('itaú')) return 'Itaú';
+  if (b.includes('inter')) return 'Inter';
+  if (b.includes('caixa')) return 'Caixa';
+  if (b.includes('bradesco')) return 'Bradesco';
+  if (b.includes('santander')) return 'Santander';
+  return rawBank.trim() || 'Nubank';
+}
+
 export function parseBankNotificationText(
   texto: string,
-  banco: string = 'Nubank/PicPay'
+  banco: string = 'Nubank'
 ): Transaction | null {
   const clean = texto.replace(/\s+/g, ' ').trim();
   if (!clean) return null;
+
+  const bankName = normalizeBankName(banco, clean);
 
   // Match Brazilian currency e.g. R$ 1.250,90 or R$ 45,00 or 45,90
   const moneyMatch =
@@ -299,7 +314,8 @@ export function parseBankNotificationText(
     lower.includes('você recebeu') ||
     lower.includes('reembolso') ||
     lower.includes('deposit') ||
-    lower.includes('caiu na conta');
+    lower.includes('caiu na conta') ||
+    lower.includes('adicionou');
 
   const tipo: TransactionType = isEntrada ? 'Entrada' : 'Saída';
 
@@ -310,13 +326,13 @@ export function parseBankNotificationText(
   const paraMatch = clean.match(/\bpara\s+([A-Za-zÀ-ÿ0-9\s*._-]+?)(?:\s+no\s+valor|\.|$)/i);
 
   if (!isEntrada && emMatch && emMatch[1].trim().length > 2) {
-    descricao = `${emMatch[1].trim()} (${banco})`;
+    descricao = `${emMatch[1].trim()} (${bankName})`;
   } else if (isEntrada && deMatch && deMatch[1].trim().length > 2 && !deMatch[1].includes('R$')) {
-    descricao = `Recebido de ${deMatch[1].trim()} (${banco})`;
+    descricao = `Recebido de ${deMatch[1].trim()} (${bankName})`;
   } else if (!isEntrada && paraMatch && paraMatch[1].trim().length > 2 && !paraMatch[1].includes('R$')) {
-    descricao = `Enviado para ${paraMatch[1].trim()} (${banco})`;
+    descricao = `Enviado para ${paraMatch[1].trim()} (${bankName})`;
   } else {
-    descricao = `${clean.slice(0, 55)} (${banco})`;
+    descricao = `${clean.slice(0, 55)} (${bankName})`;
   }
 
   const today = new Date().toISOString().slice(0, 10);
@@ -339,6 +355,7 @@ export function parseBankNotificationText(
     recorrencia: 'Única',
     parcela: '1/1',
     formaPagamento,
+    banco: bankName,
     observacoes: clean,
     criadoEm: new Date().toISOString(),
   };
