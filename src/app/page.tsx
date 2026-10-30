@@ -16,6 +16,7 @@ import {
   FileUp,
   Plus,
   RefreshCw,
+  Repeat,
   Smartphone,
   Trash2,
   Upload,
@@ -42,6 +43,7 @@ import {
 
 const STORAGE_KEYS = {
   TRANSACTIONS: 'fincontrol_real_transactions_v2',
+  DELETED_IDS: 'fincontrol_deleted_ids_v2',
   SETTINGS: 'fincontrol_sync_settings_v2',
 };
 
@@ -90,6 +92,35 @@ function shiftMonth(mesAno: string, delta: number): string {
   return `${ny}-${nm}`;
 }
 
+function addMonthsToDate(dateStr: string, delta: number): string {
+  const [y, m, d] = dateStr.split('-').map(Number);
+  const targetMonthDate = new Date(y, m - 1 + delta, 1);
+  const ny = targetMonthDate.getFullYear();
+  const nm = targetMonthDate.getMonth();
+  const maxDayInMonth = new Date(ny, nm + 1, 0).getDate();
+  const safeDay = Math.min(d || 1, maxDayInMonth);
+  return `${ny}-${String(nm + 1).padStart(2, '0')}-${String(safeDay).padStart(
+    2,
+    '0'
+  )}`;
+}
+
+function mergeTransactionsClient(
+  localList: Transaction[],
+  remoteList: Transaction[],
+  deletedIds: string[]
+): Transaction[] {
+  const delSet = new Set(deletedIds);
+  const map = new Map<string, Transaction>();
+  for (const t of remoteList) {
+    if (t && t.id && !delSet.has(t.id)) map.set(t.id, t);
+  }
+  for (const t of localList) {
+    if (t && t.id && !delSet.has(t.id)) map.set(t.id, t);
+  }
+  return Array.from(map.values()).sort((a, b) => b.data.localeCompare(a.data));
+}
+
 function normalizeRemoteTransaction(
   raw: Record<string, unknown>,
   idx: number
@@ -119,8 +150,11 @@ function normalizeRemoteTransaction(
       0,
       10
     ),
-    recorrencia: 'Única',
-    parcela: '1/1',
+    recorrencia: (String(raw.Recorrencia || raw.recorrencia || 'Única') as
+      | 'Única'
+      | 'Fixa Mensal'
+      | 'Parcelada'),
+    parcela: String(raw.Parcela || raw.parcela || '1/1'),
     formaPagamento: String(
       raw.FormaPagamento || raw.formaPagamento || 'PIX'
     ) as PaymentMethod,
@@ -134,6 +168,7 @@ export default function FinanceiroSimplesApp() {
   const fileInputRef = useRef<HTMLInputElement | null>(null);
 
   const [transactions, setTransactions] = useState<Transaction[]>([]);
+  const [deletedIds, setDeletedIds] = useState<string[]>([]);
   const [selectedMonth, setSelectedMonth] = useState<string>(today.slice(0, 7));
   const [filterTipo, setFilterTipo] = useState<
     'TODOS' | 'Entrada' | 'Saída' | 'Pendente'
@@ -146,6 +181,7 @@ export default function FinanceiroSimplesApp() {
   const [categoria, setCategoria] = useState('Alimentação');
   const [data, setData] = useState(today);
   const [status, setStatus] = useState<TransactionStatus>('Pago');
+  const [repetirMeses, setRepetirMeses] = useState<number>(1);
 
   // Google Sheets Sync & Bank Automation
   const [syncSettings, setSyncSettings] = useState<SyncSettings>({
@@ -167,9 +203,25 @@ export default function FinanceiroSimplesApp() {
   const [notifBanco, setNotifBanco] = useState<'Nubank' | 'PicPay'>('Nubank');
   const [notifTexto, setNotifTexto] = useState('');
 
-  // Load saved real data from localStorage AND sync with shared Cloud Store
+  // Change selected month AND keep the form date aligned with that month so entries never vanish
+  function handleSelectMonth(nextMonth: string) {
+    setSelectedMonth(nextMonth);
+    if (nextMonth !== 'ALL') {
+      const currentDay = data.slice(8, 10) || '01';
+      const [y, m] = nextMonth.split('-').map(Number);
+      const maxDay = new Date(y, m, 0).getDate();
+      const safeDay = String(Math.min(Number(currentDay) || 1, maxDay)).padStart(
+        2,
+        '0'
+      );
+      setData(`${nextMonth}-${safeDay}`);
+    }
+  }
+
+  // Load saved real data from localStorage AND merge with shared Cloud Store
   useEffect(() => {
     let localList: Transaction[] = [];
+    let localDeleted: string[] = [];
     try {
       localStorage.removeItem('fincontrol_transactions_v1');
 
@@ -181,6 +233,14 @@ export default function FinanceiroSimplesApp() {
           setTransactions(parsed);
         }
       }
+      const savedDel = localStorage.getItem(STORAGE_KEYS.DELETED_IDS);
+      if (savedDel) {
+        const parsedDel = JSON.parse(savedDel);
+        if (Array.isArray(parsedDel)) {
+          localDeleted = parsedDel;
+          setDeletedIds(parsedDel);
+        }
+      }
       const savedSet = localStorage.getItem(STORAGE_KEYS.SETTINGS);
       if (savedSet) {
         setSyncSettings((prev) => ({ ...prev, ...JSON.parse(savedSet) }));
@@ -189,7 +249,6 @@ export default function FinanceiroSimplesApp() {
       console.error(e);
     }
 
-    // Automatically merge local device data with Cloud Store so PC and Phone stay in sync
     async function syncWithCloudOnStart() {
       try {
         setIsSyncing(true);
@@ -199,11 +258,18 @@ export default function FinanceiroSimplesApp() {
           body: JSON.stringify({
             action: 'merge',
             transactions: localList,
+            clientTransactions: localList,
           }),
         });
         const json = await res.json();
         if (json.ok && Array.isArray(json.transactions)) {
-          setTransactions(json.transactions);
+          const allDeleted = Array.from(
+            new Set([...localDeleted, ...(json.deletedIds || [])])
+          );
+          setDeletedIds(allDeleted);
+          setTransactions((prev) =>
+            mergeTransactionsClient(prev, json.transactions, allDeleted)
+          );
           if (json.appsScriptUrl) {
             setSyncSettings((prev) => ({
               ...prev,
@@ -220,26 +286,6 @@ export default function FinanceiroSimplesApp() {
     }
 
     syncWithCloudOnStart();
-
-    const handleVisibilityOrFocus = () => {
-      if (document.visibilityState === 'visible') {
-        fetch('/api/sheets')
-          .then((r) => r.json())
-          .then((json) => {
-            if (json.ok && Array.isArray(json.transactions)) {
-              setTransactions(json.transactions);
-            }
-          })
-          .catch(() => {});
-      }
-    };
-
-    window.addEventListener('focus', handleVisibilityOrFocus);
-    document.addEventListener('visibilitychange', handleVisibilityOrFocus);
-    return () => {
-      window.removeEventListener('focus', handleVisibilityOrFocus);
-      document.removeEventListener('visibilitychange', handleVisibilityOrFocus);
-    };
   }, []);
 
   useEffect(() => {
@@ -255,13 +301,27 @@ export default function FinanceiroSimplesApp() {
 
   useEffect(() => {
     try {
+      localStorage.setItem(
+        STORAGE_KEYS.DELETED_IDS,
+        JSON.stringify(deletedIds)
+      );
+    } catch (e) {
+      console.error(e);
+    }
+  }, [deletedIds]);
+
+  useEffect(() => {
+    try {
       localStorage.setItem(STORAGE_KEYS.SETTINGS, JSON.stringify(syncSettings));
     } catch (e) {
       console.error(e);
     }
   }, [syncSettings]);
 
-  async function pushToSheets(payload: Record<string, unknown>) {
+  async function pushToSheets(
+    payload: Record<string, unknown>,
+    currentList: Transaction[]
+  ) {
     try {
       setIsSyncing(true);
       const res = await fetch('/api/sheets', {
@@ -269,13 +329,19 @@ export default function FinanceiroSimplesApp() {
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
           scriptUrl: syncSettings.appsScriptUrl,
+          clientTransactions: currentList,
           ...payload,
         }),
       });
       const json = await res.json();
       if (json.ok) {
         if (Array.isArray(json.transactions)) {
-          setTransactions(json.transactions);
+          const allDeleted = Array.from(
+            new Set([...deletedIds, ...(json.deletedIds || [])])
+          );
+          setTransactions((prev) =>
+            mergeTransactionsClient(prev, json.transactions, allDeleted)
+          );
         }
         setSyncSettings((prev) => ({
           ...prev,
@@ -307,12 +373,18 @@ export default function FinanceiroSimplesApp() {
           (item: Record<string, unknown>, idx: number) =>
             normalizeRemoteTransaction(item, idx)
         );
-        setTransactions(list);
+        const allDeleted = Array.from(
+          new Set([...deletedIds, ...(json.deletedIds || [])])
+        );
+        setDeletedIds(allDeleted);
+        setTransactions((prev) =>
+          mergeTransactionsClient(prev, list, allDeleted)
+        );
         setSyncSettings((prev) => ({
           ...prev,
           lastSyncAt: new Date().toISOString(),
         }));
-        setSyncMsg(`Pronto! ${list.length} lançamentos sincronizados.`);
+        setSyncMsg(`Pronto! Dados sincronizados com sucesso.`);
       } else {
         setSyncMsg(json.error || 'Erro ao sincronizar.');
       }
@@ -341,10 +413,11 @@ export default function FinanceiroSimplesApp() {
 
     const existingIds = new Set(transactions.map((t) => t.id));
     const uniqueNew = imported.filter((t) => !existingIds.has(t.id));
+    const updatedList = [...uniqueNew, ...transactions];
 
-    setTransactions((prev) => [...uniqueNew, ...prev]);
+    setTransactions(updatedList);
     if (uniqueNew[0]?.mesAno) {
-      setSelectedMonth(uniqueNew[0].mesAno);
+      handleSelectMonth(uniqueNew[0].mesAno);
     }
     setBannerNotice(
       `${uniqueNew.length} lançamentos importados do extrato (${file.name})!`
@@ -352,14 +425,17 @@ export default function FinanceiroSimplesApp() {
     setTimeout(() => setBannerNotice(null), 5000);
 
     if (uniqueNew.length > 0) {
-      await pushToSheets({
-        action: 'merge',
-        transactions: [...uniqueNew, ...transactions],
-      });
+      await pushToSheets(
+        {
+          action: 'addBatch',
+          transactions: uniqueNew,
+        },
+        updatedList
+      );
     }
   }
 
-  // Option 3: Parse bank notification text directly or pull from webhook buffer
+  // Option 3: Parse bank notification text directly
   async function handleProcessNotificationText(e: React.FormEvent) {
     e.preventDefault();
     const tx = parseBankNotificationText(notifTexto, notifBanco);
@@ -369,8 +445,9 @@ export default function FinanceiroSimplesApp() {
       );
       return;
     }
-    setTransactions((prev) => [tx, ...prev]);
-    setSelectedMonth(tx.mesAno);
+    const updatedList = [tx, ...transactions];
+    setTransactions(updatedList);
+    handleSelectMonth(tx.mesAno);
     setNotifTexto('');
     setIsBankModalOpen(false);
     setBannerNotice(
@@ -380,7 +457,7 @@ export default function FinanceiroSimplesApp() {
     );
     setTimeout(() => setBannerNotice(null), 5000);
 
-    await pushToSheets({ action: 'add', transaction: tx });
+    await pushToSheets({ action: 'add', transaction: tx }, updatedList);
   }
 
   async function pullRecentWebhookNotifications() {
@@ -388,10 +465,14 @@ export default function FinanceiroSimplesApp() {
       const res = await fetch('/api/sheets');
       const json = await res.json();
       if (json.ok && Array.isArray(json.transactions)) {
-        setTransactions(json.transactions);
-        setBannerNotice(
-          `Dados atualizados da nuvem (${json.transactions.length} lançamentos)!`
+        const allDeleted = Array.from(
+          new Set([...deletedIds, ...(json.deletedIds || [])])
         );
+        setDeletedIds(allDeleted);
+        setTransactions((prev) =>
+          mergeTransactionsClient(prev, json.transactions, allDeleted)
+        );
+        setBannerNotice('Dados sincronizados entre computador, celular e planilha!');
         setTimeout(() => setBannerNotice(null), 4000);
       }
     } catch {
@@ -405,29 +486,63 @@ export default function FinanceiroSimplesApp() {
     if (!descricao.trim() || Number.isNaN(numericVal) || numericVal <= 0)
       return;
 
-    const newTx: Transaction = {
-      id: `TX-${Date.now().toString().slice(-6)}`,
-      data,
-      mesAno: data.slice(0, 7),
-      descricao: descricao.trim(),
-      tipo,
-      categoria,
-      valor: numericVal,
-      status,
-      vencimento: data,
-      recorrencia: 'Única',
-      parcela: '1/1',
-      formaPagamento: 'PIX',
-      observacoes: '',
-      criadoEm: new Date().toISOString(),
-    };
+    const count = Math.max(1, Math.min(24, repetirMeses));
+    const baseTime = Date.now();
+    const createdBatch: Transaction[] = [];
 
-    setTransactions((prev) => [newTx, ...prev]);
-    setSelectedMonth(newTx.mesAno);
+    for (let i = 0; i < count; i++) {
+      const targetDate = i === 0 ? data : addMonthsToDate(data, i);
+      createdBatch.push({
+        id:
+          count === 1
+            ? `TX-${baseTime.toString().slice(-6)}`
+            : `TX-${baseTime.toString().slice(-5)}-${i + 1}`,
+        data: targetDate,
+        mesAno: targetDate.slice(0, 7),
+        descricao:
+          count > 1
+            ? `${descricao.trim()} (${i + 1}/${count})`
+            : descricao.trim(),
+        tipo,
+        categoria,
+        valor: numericVal,
+        status: i === 0 ? status : 'Pendente',
+        vencimento: targetDate,
+        recorrencia: count > 1 ? 'Parcelada' : 'Única',
+        parcela: `${i + 1}/${count}`,
+        formaPagamento: 'PIX',
+        observacoes: count > 1 ? `Lançado para ${count} meses` : '',
+        criadoEm: new Date().toISOString(),
+      });
+    }
+
+    const updatedList = [...createdBatch, ...transactions];
+    setTransactions(updatedList);
+    setSelectedMonth(createdBatch[0].mesAno);
     setDescricao('');
     setValor('');
 
-    await pushToSheets({ action: 'add', transaction: newTx });
+    if (createdBatch.length === 1) {
+      setBannerNotice(
+        `${tipo} "${createdBatch[0].descricao}" (${formatCurrency(
+          numericVal
+        )}) salva em ${formatMonthLabel(createdBatch[0].mesAno)}!`
+      );
+      setTimeout(() => setBannerNotice(null), 4000);
+      await pushToSheets(
+        { action: 'add', transaction: createdBatch[0] },
+        updatedList
+      );
+    } else {
+      setBannerNotice(
+        `${createdBatch.length} lançamentos criados para os próximos meses!`
+      );
+      setTimeout(() => setBannerNotice(null), 4000);
+      await pushToSheets(
+        { action: 'addBatch', transactions: createdBatch },
+        updatedList
+      );
+    }
   }
 
   async function handleToggleStatus(tx: Transaction) {
@@ -435,15 +550,19 @@ export default function FinanceiroSimplesApp() {
       ...tx,
       status: tx.status === 'Pago' ? 'Pendente' : 'Pago',
     };
-    setTransactions((prev) =>
-      prev.map((t) => (t.id === tx.id ? updated : t))
+    const updatedList = transactions.map((t) =>
+      t.id === tx.id ? updated : t
     );
-    await pushToSheets({ action: 'update', transaction: updated });
+    setTransactions(updatedList);
+    await pushToSheets({ action: 'update', transaction: updated }, updatedList);
   }
 
   async function handleDelete(id: string) {
-    setTransactions((prev) => prev.filter((t) => t.id !== id));
-    await pushToSheets({ action: 'delete', id });
+    const updatedList = transactions.filter((t) => t.id !== id);
+    const nextDeleted = [...deletedIds, id];
+    setTransactions(updatedList);
+    setDeletedIds(nextDeleted);
+    await pushToSheets({ action: 'delete', id }, updatedList);
   }
 
   const monthTransactions = useMemo(() => {
@@ -521,23 +640,27 @@ export default function FinanceiroSimplesApp() {
             <button
               type="button"
               onClick={() =>
-                setSelectedMonth((p) =>
-                  p === 'ALL' ? today.slice(0, 7) : shiftMonth(p, -1)
+                handleSelectMonth(
+                  selectedMonth === 'ALL'
+                    ? today.slice(0, 7)
+                    : shiftMonth(selectedMonth, -1)
                 )
               }
               className="p-1.5 rounded-lg hover:bg-slate-800 text-slate-400 hover:text-white cursor-pointer"
             >
               <ChevronLeft className="w-4 h-4" />
             </button>
-            <div className="flex items-center gap-1.5 px-2.5 text-xs sm:text-sm font-semibold min-w-[125px] justify-center">
+            <div className="flex items-center gap-1.5 px-2.5 text-xs sm:text-sm font-semibold min-w-[130px] justify-center">
               <Calendar className="w-3.5 h-3.5 text-emerald-400" />
               <span>{formatMonthLabel(selectedMonth)}</span>
             </div>
             <button
               type="button"
               onClick={() =>
-                setSelectedMonth((p) =>
-                  p === 'ALL' ? today.slice(0, 7) : shiftMonth(p, 1)
+                handleSelectMonth(
+                  selectedMonth === 'ALL'
+                    ? today.slice(0, 7)
+                    : shiftMonth(selectedMonth, 1)
                 )
               }
               className="p-1.5 rounded-lg hover:bg-slate-800 text-slate-400 hover:text-white cursor-pointer"
@@ -547,8 +670,8 @@ export default function FinanceiroSimplesApp() {
             <button
               type="button"
               onClick={() =>
-                setSelectedMonth((p) =>
-                  p === 'ALL' ? today.slice(0, 7) : 'ALL'
+                handleSelectMonth(
+                  selectedMonth === 'ALL' ? today.slice(0, 7) : 'ALL'
                 )
               }
               className={`px-2 py-1 rounded-lg text-xs font-medium cursor-pointer ${
@@ -557,7 +680,7 @@ export default function FinanceiroSimplesApp() {
                   : 'text-slate-400 hover:text-white'
               }`}
             >
-              Todos
+              Todos ({transactions.length})
             </button>
           </div>
 
@@ -596,15 +719,16 @@ export default function FinanceiroSimplesApp() {
 
             <button
               type="button"
-              onClick={() => setIsSyncModalOpen(true)}
+              onClick={pullFromSheets}
               className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-xl text-xs font-medium bg-slate-800 hover:bg-slate-700 text-slate-200 transition cursor-pointer"
+              title="Atualizar dados entre Computador, Celular e Planilha"
             >
               <RefreshCw
                 className={`w-3.5 h-3.5 text-emerald-400 ${
                   isSyncing ? 'animate-spin' : ''
                 }`}
               />
-              <span>Sincronizar</span>
+              <span>Atualizar</span>
             </button>
           </div>
         </div>
@@ -628,7 +752,7 @@ export default function FinanceiroSimplesApp() {
         <section className="grid grid-cols-1 sm:grid-cols-3 gap-3.5">
           <div className="rounded-2xl bg-slate-900 border border-slate-800 p-4">
             <div className="flex items-center justify-between text-xs text-slate-400 mb-1">
-              <span>ENTRADAS</span>
+              <span>ENTRADAS ({formatMonthLabel(selectedMonth)})</span>
               <ArrowUpCircle className="w-4 h-4 text-emerald-400" />
             </div>
             <div className="text-2xl font-bold text-emerald-400">
@@ -638,7 +762,7 @@ export default function FinanceiroSimplesApp() {
 
           <div className="rounded-2xl bg-slate-900 border border-slate-800 p-4">
             <div className="flex items-center justify-between text-xs text-slate-400 mb-1">
-              <span>SAÍDAS (GASTOS)</span>
+              <span>SAÍDAS ({formatMonthLabel(selectedMonth)})</span>
               <ArrowDownCircle className="w-4 h-4 text-rose-400" />
             </div>
             <div className="text-2xl font-bold text-rose-400">
@@ -648,7 +772,7 @@ export default function FinanceiroSimplesApp() {
 
           <div className="rounded-2xl bg-slate-900 border border-slate-800 p-4">
             <div className="flex items-center justify-between text-xs text-slate-400 mb-1">
-              <span>SALDO DO MÊS</span>
+              <span>SALDO ({formatMonthLabel(selectedMonth)})</span>
               <Wallet className="w-4 h-4 text-sky-400" />
             </div>
             <div
@@ -666,7 +790,7 @@ export default function FinanceiroSimplesApp() {
           <form onSubmit={handleAddTransaction} className="space-y-4">
             <div className="flex flex-wrap items-center justify-between gap-2">
               <h2 className="text-sm font-bold uppercase tracking-wider text-slate-300">
-                Novo Lançamento
+                Novo Lançamento em {formatMonthLabel(data.slice(0, 7))}
               </h2>
 
               {/* Seletor Entrada / Saída */}
@@ -759,37 +883,61 @@ export default function FinanceiroSimplesApp() {
                 <input
                   type="date"
                   value={data}
-                  onChange={(e) => setData(e.target.value)}
+                  onChange={(e) => {
+                    const nextDate = e.target.value;
+                    setData(nextDate);
+                    if (nextDate && nextDate.length >= 7) {
+                      setSelectedMonth(nextDate.slice(0, 7));
+                    }
+                  }}
                   className="w-full px-3 py-2 bg-slate-950 border border-slate-800 rounded-xl text-sm text-white focus:outline-none focus:border-emerald-500"
                 />
               </div>
             </div>
 
             <div className="flex flex-wrap items-center justify-between gap-3 pt-1">
-              <div className="flex items-center gap-2 text-xs">
-                <span className="text-slate-400">Situação:</span>
-                <button
-                  type="button"
-                  onClick={() => setStatus('Pago')}
-                  className={`px-2.5 py-1 rounded-lg font-medium cursor-pointer ${
-                    status === 'Pago'
-                      ? 'bg-emerald-500/20 text-emerald-300 border border-emerald-500/40'
-                      : 'bg-slate-950 text-slate-400 border border-slate-800'
-                  }`}
-                >
-                  Pago / Recebido
-                </button>
-                <button
-                  type="button"
-                  onClick={() => setStatus('Pendente')}
-                  className={`px-2.5 py-1 rounded-lg font-medium cursor-pointer ${
-                    status === 'Pendente'
-                      ? 'bg-amber-500/20 text-amber-300 border border-amber-500/40'
-                      : 'bg-slate-950 text-slate-400 border border-slate-800'
-                  }`}
-                >
-                  Pendente
-                </button>
+              <div className="flex flex-wrap items-center gap-3 text-xs">
+                <div className="flex items-center gap-1.5">
+                  <span className="text-slate-400">Situação:</span>
+                  <button
+                    type="button"
+                    onClick={() => setStatus('Pago')}
+                    className={`px-2.5 py-1 rounded-lg font-medium cursor-pointer ${
+                      status === 'Pago'
+                        ? 'bg-emerald-500/20 text-emerald-300 border border-emerald-500/40'
+                        : 'bg-slate-950 text-slate-400 border border-slate-800'
+                    }`}
+                  >
+                    Pago / Recebido
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => setStatus('Pendente')}
+                    className={`px-2.5 py-1 rounded-lg font-medium cursor-pointer ${
+                      status === 'Pendente'
+                        ? 'bg-amber-500/20 text-amber-300 border border-amber-500/40'
+                        : 'bg-slate-950 text-slate-400 border border-slate-800'
+                    }`}
+                  >
+                    Pendente
+                  </button>
+                </div>
+
+                {/* Repetir nos próximos meses */}
+                <div className="flex items-center gap-1.5">
+                  <Repeat className="w-3.5 h-3.5 text-slate-400" />
+                  <select
+                    value={repetirMeses}
+                    onChange={(e) => setRepetirMeses(Number(e.target.value))}
+                    className="px-2.5 py-1 bg-slate-950 border border-slate-800 rounded-lg text-xs text-slate-200 focus:outline-none focus:border-emerald-500"
+                  >
+                    <option value={1}>Apenas neste mês (1x)</option>
+                    <option value={2}>Repetir por 2 meses</option>
+                    <option value={3}>Repetir por 3 meses</option>
+                    <option value={6}>Repetir por 6 meses</option>
+                    <option value={12}>Repetir por 12 meses (1 ano)</option>
+                  </select>
+                </div>
               </div>
 
               <button
@@ -811,7 +959,7 @@ export default function FinanceiroSimplesApp() {
         <section className="rounded-2xl bg-slate-900 border border-slate-800 p-5 space-y-4">
           <div className="flex flex-wrap items-center justify-between gap-2">
             <h2 className="text-sm font-bold uppercase tracking-wider text-slate-300">
-              Lançamentos ({filteredList.length})
+              Lançamentos de {formatMonthLabel(selectedMonth)} ({filteredList.length})
             </h2>
 
             <div className="flex items-center gap-1.5 text-xs">
@@ -839,9 +987,23 @@ export default function FinanceiroSimplesApp() {
           </div>
 
           {filteredList.length === 0 ? (
-            <div className="py-12 text-center text-slate-400 text-sm border border-dashed border-slate-800 rounded-xl">
-              Nenhum lançamento neste período. Adicione manualmente acima ou clique em{' '}
-              <strong className="text-slate-200">Importar CSV/OFX</strong> para subir seu extrato do Nubank / PicPay.
+            <div className="py-10 text-center text-slate-400 text-sm border border-dashed border-slate-800 rounded-xl space-y-3">
+              <p>
+                Nenhum lançamento cadastrado em{' '}
+                <strong className="text-slate-200">
+                  {formatMonthLabel(selectedMonth)}
+                </strong>
+                .
+              </p>
+              {transactions.length > 0 && selectedMonth !== 'ALL' && (
+                <button
+                  type="button"
+                  onClick={() => handleSelectMonth('ALL')}
+                  className="px-4 py-2 rounded-xl text-xs font-bold bg-emerald-500/20 text-emerald-300 border border-emerald-500/30 hover:bg-emerald-500/30 cursor-pointer"
+                >
+                  Ver todos os {transactions.length} lançamentos de outros meses
+                </button>
+              )}
             </div>
           ) : (
             <div className="divide-y divide-slate-800/80">
@@ -920,7 +1082,7 @@ export default function FinanceiroSimplesApp() {
         </section>
       </main>
 
-      {/* MODAL: AUTOMAÇÃO NUBANK & PICPAY (OPÇÃO 1 + OPÇÃO 3) */}
+      {/* MODAL: AUTOMAÇÃO NUBANK & PICPAY */}
       {isBankModalOpen && (
         <div className="fixed inset-0 z-50 bg-black/75 flex items-center justify-center p-4 overflow-y-auto">
           <div className="bg-slate-900 border border-slate-800 rounded-2xl max-w-xl w-full p-5 space-y-5 max-h-[90vh] overflow-y-auto">
@@ -940,7 +1102,6 @@ export default function FinanceiroSimplesApp() {
               </button>
             </div>
 
-            {/* Opção 1: Importar Arquivo CSV/OFX */}
             <div className="p-4 rounded-xl bg-slate-950 border border-slate-800 space-y-2.5">
               <div className="flex items-center justify-between">
                 <span className="text-xs font-bold uppercase tracking-wider text-purple-300">
@@ -958,11 +1119,11 @@ export default function FinanceiroSimplesApp() {
                 </button>
               </div>
               <p className="text-xs text-slate-400">
-                No app do <strong>Nubank</strong> ou <strong>PicPay</strong>, exporte o extrato do mês em CSV ou OFX e selecione acima. O sistema separa Entradas e Saídas automaticamente.
+                No app do <strong>Nubank</strong> ou <strong>PicPay</strong>,
+                exporte o extrato do mês em CSV ou OFX e selecione acima.
               </p>
             </div>
 
-            {/* Lançador Rápido por Texto de Notificação / Comprovante */}
             <form
               onSubmit={handleProcessNotificationText}
               className="p-4 rounded-xl bg-slate-950 border border-slate-800 space-y-3"
@@ -1001,7 +1162,7 @@ export default function FinanceiroSimplesApp() {
                   onClick={pullRecentWebhookNotifications}
                   className="px-3 py-1.5 rounded-lg text-xs font-medium bg-slate-800 hover:bg-slate-700 text-slate-200 cursor-pointer"
                 >
-                  Buscar Notificações do Celular
+                  Sincronizar Nuvem Agora
                 </button>
                 <button
                   type="submit"
@@ -1012,7 +1173,6 @@ export default function FinanceiroSimplesApp() {
               </div>
             </form>
 
-            {/* Opção 3: Webhook Automático no Celular */}
             <div className="p-4 rounded-xl bg-slate-950 border border-slate-800 space-y-2.5">
               <div className="flex items-center justify-between">
                 <span className="text-xs font-bold uppercase tracking-wider text-sky-300">
@@ -1031,9 +1191,6 @@ export default function FinanceiroSimplesApp() {
                   {copiedWebhook ? 'Link Copiado!' : 'Copiar URL do Webhook'}
                 </button>
               </div>
-              <p className="text-xs text-slate-400">
-                No app gratuito <strong>MacroDroid</strong> (Android) ou <strong>Atalhos</strong> (iPhone), crie um gatilho quando chegar notificação do <strong>Nubank</strong> ou <strong>PicPay</strong> para chamar esta URL (substituindo <code>{'{notificacao}'}</code> pelo texto da notificação):
-              </p>
               <code className="block p-2 rounded bg-slate-900 text-[11px] text-slate-300 break-all border border-slate-800">
                 {webhookEndpointUrl}
               </code>
@@ -1089,25 +1246,28 @@ export default function FinanceiroSimplesApp() {
                 onClick={pullFromSheets}
                 className="inline-flex items-center gap-1.5 px-3.5 py-2 rounded-xl text-xs font-bold bg-emerald-500 text-slate-950 cursor-pointer"
               >
-                <Download className="w-3.5 h-3.5" /> Carregar da Planilha
+                <Download className="w-3.5 h-3.5" /> Sincronizar Agora
               </button>
               <button
                 type="button"
                 onClick={async () => {
                   setSyncMsg('Enviando para a planilha...');
-                  const ok = await pushToSheets({
-                    action: 'syncAll',
-                    transactions,
-                  });
+                  const ok = await pushToSheets(
+                    {
+                      action: 'syncAll',
+                      transactions,
+                    },
+                    transactions
+                  );
                   setSyncMsg(
                     ok
-                      ? 'Planilha atualizada com sucesso!'
-                      : 'Configure a URL acima primeiro.'
+                      ? 'Dados salvos na nuvem e sincronizados!'
+                      : 'Erro ao salvar.'
                   );
                 }}
                 className="inline-flex items-center gap-1.5 px-3.5 py-2 rounded-xl text-xs font-bold bg-slate-800 text-slate-200 cursor-pointer"
               >
-                <Upload className="w-3.5 h-3.5" /> Salvar Tudo na Planilha
+                <Upload className="w-3.5 h-3.5" /> Salvar Tudo
               </button>
               <button
                 type="button"

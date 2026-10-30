@@ -19,11 +19,17 @@ const defaultState: CloudState = {
   updatedAt: new Date().toISOString(),
 };
 
+// In-memory cache per warm serverless instance
+let memoryCache: CloudState | null = null;
+
 function readTmpFallback(): CloudState {
+  if (memoryCache) return memoryCache;
   try {
     if (fs.existsSync(TMP_FILE_PATH)) {
       const raw = fs.readFileSync(TMP_FILE_PATH, 'utf-8');
-      return { ...defaultState, ...JSON.parse(raw) };
+      const parsed = { ...defaultState, ...JSON.parse(raw) };
+      memoryCache = parsed;
+      return parsed;
     }
   } catch {
     // ignore
@@ -32,6 +38,7 @@ function readTmpFallback(): CloudState {
 }
 
 function writeTmpFallback(state: CloudState) {
+  memoryCache = state;
   try {
     fs.writeFileSync(TMP_FILE_PATH, JSON.stringify(state), 'utf-8');
   } catch {
@@ -49,11 +56,39 @@ export async function getCloudState(): Promise<CloudState> {
     if (res.ok) {
       const json = await res.json();
       const data = json?.data || {};
+      const remoteTx: Transaction[] = Array.isArray(data.transactions)
+        ? data.transactions
+        : [];
+      const remoteDeleted: string[] = Array.isArray(data.deletedIds)
+        ? data.deletedIds
+        : [];
+
+      // Merge with warm memory/tmp cache so we never lose recent writes
+      const local = readTmpFallback();
+      const deletedSet = new Set([...remoteDeleted, ...local.deletedIds]);
+      const mergedMap = new Map<string, Transaction>();
+
+      for (const t of local.transactions) {
+        if (t && t.id && !deletedSet.has(t.id)) {
+          mergedMap.set(t.id, t);
+        }
+      }
+      for (const t of remoteTx) {
+        if (t && t.id && !deletedSet.has(t.id)) {
+          mergedMap.set(t.id, t);
+        }
+      }
+
       const state: CloudState = {
-        transactions: Array.isArray(data.transactions) ? data.transactions : [],
-        deletedIds: Array.isArray(data.deletedIds) ? data.deletedIds : [],
+        transactions: Array.from(mergedMap.values()).sort((a, b) =>
+          b.data.localeCompare(a.data)
+        ),
+        deletedIds: Array.from(deletedSet),
         appsScriptUrl: String(
-          data.appsScriptUrl || process.env.NEXT_PUBLIC_APPS_SCRIPT_URL || ''
+          data.appsScriptUrl ||
+            local.appsScriptUrl ||
+            process.env.NEXT_PUBLIC_APPS_SCRIPT_URL ||
+            ''
         ),
         updatedAt: String(data.updatedAt || new Date().toISOString()),
       };
@@ -61,7 +96,7 @@ export async function getCloudState(): Promise<CloudState> {
       return state;
     }
   } catch {
-    // fallback to /tmp
+    // fallback to /tmp + memory
   }
   return readTmpFallback();
 }
@@ -87,7 +122,7 @@ export async function saveCloudState(state: CloudState): Promise<CloudState> {
       cache: 'no-store',
     });
   } catch {
-    // fallback already saved in /tmp
+    // fallback already saved in memory & /tmp
   }
 
   return nextState;

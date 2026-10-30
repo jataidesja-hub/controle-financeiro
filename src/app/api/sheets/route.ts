@@ -66,13 +66,34 @@ export async function POST(request: NextRequest) {
       state.appsScriptUrl = scriptUrl;
     }
 
+    // Always preserve clientTransactions if sent so a cold-start never drops items
+    if (Array.isArray(body.clientTransactions)) {
+      const deletedSet = new Set(state.deletedIds);
+      const map = new Map<string, Transaction>();
+      for (const t of state.transactions) {
+        if (t && t.id && !deletedSet.has(t.id)) map.set(t.id, t);
+      }
+      for (const t of body.clientTransactions as Transaction[]) {
+        if (t && t.id && !deletedSet.has(t.id)) map.set(t.id, t);
+      }
+      state.transactions = Array.from(map.values());
+    }
+
     if (action === 'add' && body.transaction) {
       const tx = body.transaction as Transaction;
+      state.deletedIds = state.deletedIds.filter((id) => id !== tx.id);
       state.transactions = [
         tx,
         ...state.transactions.filter((t) => t.id !== tx.id),
       ];
-      state.deletedIds = state.deletedIds.filter((id) => id !== tx.id);
+    } else if (action === 'addBatch' && Array.isArray(body.transactions)) {
+      const batch = body.transactions as Transaction[];
+      const batchIds = new Set(batch.map((b) => b.id));
+      state.deletedIds = state.deletedIds.filter((id) => !batchIds.has(id));
+      state.transactions = [
+        ...batch,
+        ...state.transactions.filter((t) => !batchIds.has(t.id)),
+      ];
     } else if (action === 'update' && body.transaction) {
       const tx = body.transaction as Transaction;
       const exists = state.transactions.some((t) => t.id === tx.id);
@@ -97,13 +118,12 @@ export async function POST(request: NextRequest) {
           map.set(t.id, t);
         }
       }
-      state.transactions = Array.from(map.values()).sort((a, b) =>
-        b.data.localeCompare(a.data)
-      );
+      state.transactions = Array.from(map.values());
     } else if (action === 'syncAll' && Array.isArray(body.transactions)) {
       state.transactions = body.transactions as Transaction[];
     }
 
+    state.transactions.sort((a, b) => b.data.localeCompare(a.data));
     const saved = await saveCloudState(state);
 
     // Also forward to Google Sheets if Apps Script URL is configured
@@ -114,7 +134,7 @@ export async function POST(request: NextRequest) {
           method: 'POST',
           headers: { 'Content-Type': 'text/plain;charset=utf-8' },
           body: JSON.stringify({
-            ...body,
+            action: 'syncAll',
             transactions: saved.transactions,
           }),
           redirect: 'follow',
