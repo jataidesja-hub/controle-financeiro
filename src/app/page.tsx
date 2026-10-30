@@ -182,6 +182,11 @@ function normalizeRemoteTransaction(
   };
 }
 
+interface BeforeInstallPromptEvent extends Event {
+  prompt: () => Promise<void>;
+  userChoice: Promise<{ outcome: 'accepted' | 'dismissed' }>;
+}
+
 export default function FinanceiroSimplesApp() {
   const today = getTodayISO();
   const fileInputRef = useRef<HTMLInputElement | null>(null);
@@ -194,6 +199,12 @@ export default function FinanceiroSimplesApp() {
   const [filterTipo, setFilterTipo] = useState<
     'TODOS' | 'Entrada' | 'Saída' | 'Pendente'
   >('TODOS');
+
+  // PWA Mobile Installer state
+  const [deferredPrompt, setDeferredPrompt] =
+    useState<BeforeInstallPromptEvent | null>(null);
+  const [isInstallModalOpen, setIsInstallModalOpen] = useState(false);
+  const [isStandalone, setIsStandalone] = useState(false);
 
   // Form states (inline & direct)
   const [tipo, setTipo] = useState<TransactionType>('Saída');
@@ -329,6 +340,25 @@ export default function FinanceiroSimplesApp() {
       console.error(e);
     }
 
+    // Register Service Worker and capture PWA install prompt
+    if (typeof window !== 'undefined') {
+      const standalone =
+        window.matchMedia('(display-mode: standalone)').matches ||
+        (window.navigator as unknown as { standalone?: boolean }).standalone ===
+          true;
+      setIsStandalone(standalone);
+
+      if ('serviceWorker' in navigator) {
+        navigator.serviceWorker.register('/sw.js').catch(() => {});
+      }
+
+      const handleBeforeInstall = (e: Event) => {
+        e.preventDefault();
+        setDeferredPrompt(e as BeforeInstallPromptEvent);
+      };
+      window.addEventListener('beforeinstallprompt', handleBeforeInstall);
+    }
+
     async function syncWithCloudOnStart() {
       try {
         setIsSyncing(true);
@@ -339,6 +369,7 @@ export default function FinanceiroSimplesApp() {
             action: 'merge',
             transactions: localList,
             clientTransactions: localList,
+            clientDeletedIds: localDeleted,
             banks: localBanks,
           }),
         });
@@ -410,10 +441,23 @@ export default function FinanceiroSimplesApp() {
     }
   }, [syncSettings]);
 
+  async function handleInstallAppClick() {
+    if (deferredPrompt) {
+      await deferredPrompt.prompt();
+      const choice = await deferredPrompt.userChoice;
+      if (choice.outcome === 'accepted') {
+        setDeferredPrompt(null);
+      }
+      return;
+    }
+    setIsInstallModalOpen(true);
+  }
+
   async function pushToSheets(
     payload: Record<string, unknown>,
     currentList: Transaction[],
-    currentBanks: BankAccount[] = banks
+    currentBanks: BankAccount[] = banks,
+    currentDeleted: string[] = deletedIds
   ) {
     try {
       setIsSyncing(true);
@@ -423,6 +467,7 @@ export default function FinanceiroSimplesApp() {
         body: JSON.stringify({
           scriptUrl: syncSettings.appsScriptUrl,
           clientTransactions: currentList,
+          clientDeletedIds: currentDeleted,
           banks: currentBanks,
           ...payload,
         }),
@@ -431,7 +476,7 @@ export default function FinanceiroSimplesApp() {
       if (json.ok) {
         if (Array.isArray(json.transactions)) {
           const allDeleted = Array.from(
-            new Set([...deletedIds, ...(json.deletedIds || [])])
+            new Set([...currentDeleted, ...(json.deletedIds || [])])
           );
           setTransactions((prev) =>
             mergeTransactionsClient(prev, json.transactions, allDeleted)
@@ -738,7 +783,7 @@ export default function FinanceiroSimplesApp() {
     const nextDeleted = [...deletedIds, id];
     setTransactions(updatedList);
     setDeletedIds(nextDeleted);
-    await pushToSheets({ action: 'delete', id }, updatedList);
+    await pushToSheets({ action: 'delete', id }, updatedList, banks, nextDeleted);
   }
 
   const monthTransactions = useMemo(() => {
@@ -880,6 +925,18 @@ export default function FinanceiroSimplesApp() {
 
           {/* Ações rápidas */}
           <div className="flex flex-wrap items-center gap-2">
+            {!isStandalone && (
+              <button
+                type="button"
+                onClick={handleInstallAppClick}
+                className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-xl text-xs font-bold bg-emerald-500 hover:bg-emerald-400 text-slate-950 shadow-sm shadow-emerald-500/20 transition cursor-pointer"
+                title="Instalar aplicativo no celular ou computador"
+              >
+                <Download className="w-3.5 h-3.5" />
+                <span>Instalar App</span>
+              </button>
+            )}
+
             <button
               type="button"
               onClick={() => fileInputRef.current?.click()}
@@ -1777,6 +1834,93 @@ export default function FinanceiroSimplesApp() {
                   : 'Copiar Script da Planilha'}
               </button>
             </div>
+          </div>
+        </div>
+      )}
+
+      {/* Modal de Instalação no Celular (PWA) */}
+      {isInstallModalOpen && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/75 p-4">
+          <div className="bg-slate-900 border border-slate-800 rounded-2xl max-w-md w-full p-5 space-y-4 shadow-2xl">
+            <div className="flex items-center justify-between border-b border-slate-800 pb-3">
+              <div className="flex items-center gap-2.5">
+                <div className="w-9 h-9 rounded-xl bg-emerald-500/20 border border-emerald-500/40 flex items-center justify-center text-emerald-400">
+                  <Smartphone className="w-5 h-5" />
+                </div>
+                <div>
+                  <h3 className="font-bold text-white text-base">
+                    Instalar no Celular
+                  </h3>
+                  <p className="text-xs text-slate-400">
+                    Acesse direto da tela inicial como aplicativo
+                  </p>
+                </div>
+              </div>
+              <button
+                type="button"
+                onClick={() => setIsInstallModalOpen(false)}
+                className="text-slate-400 hover:text-white p-1 cursor-pointer"
+              >
+                <X className="w-5 h-5" />
+              </button>
+            </div>
+
+            {deferredPrompt && (
+              <button
+                type="button"
+                onClick={handleInstallAppClick}
+                className="w-full flex items-center justify-center gap-2 py-3 rounded-xl bg-emerald-500 hover:bg-emerald-400 text-slate-950 font-bold text-sm cursor-pointer transition"
+              >
+                <Download className="w-4 h-4" />
+                Instalar Aplicativo Agora
+              </button>
+            )}
+
+            <div className="space-y-3 text-xs text-slate-300">
+              <div className="bg-slate-950 border border-slate-800 rounded-xl p-3.5 space-y-1.5">
+                <p className="font-bold text-emerald-400 text-sm">
+                  🤖 No Android (Chrome):
+                </p>
+                <ol className="list-decimal list-inside space-y-1 text-slate-300">
+                  <li>
+                    Toque nos <strong>3 pontinhos (⋮)</strong> no canto superior direito do navegador.
+                  </li>
+                  <li>
+                    Toque em <strong>&quot;Instalar aplicativo&quot;</strong> ou{' '}
+                    <strong>&quot;Adicionar à tela inicial&quot;</strong>.
+                  </li>
+                  <li>
+                    Confirme em <strong>Instalar</strong> — o ícone verde vai aparecer junto aos seus apps!
+                  </li>
+                </ol>
+              </div>
+
+              <div className="bg-slate-950 border border-slate-800 rounded-xl p-3.5 space-y-1.5">
+                <p className="font-bold text-sky-400 text-sm">
+                  🍎 No iPhone (Safari):
+                </p>
+                <ol className="list-decimal list-inside space-y-1 text-slate-300">
+                  <li>
+                    Toque no botão <strong>Compartilhar</strong> (quadrado com seta para cima na barra inferior).
+                  </li>
+                  <li>
+                    Role para baixo e toque em{' '}
+                    <strong>&quot;Adicionar à Tela de Início&quot;</strong>.
+                  </li>
+                  <li>
+                    Toque em <strong>Adicionar</strong> no canto superior direito.
+                  </li>
+                </ol>
+              </div>
+            </div>
+
+            <button
+              type="button"
+              onClick={() => setIsInstallModalOpen(false)}
+              className="w-full py-2.5 rounded-xl bg-slate-800 hover:bg-slate-700 text-white font-semibold text-xs cursor-pointer transition"
+            >
+              Entendi
+            </button>
           </div>
         </div>
       )}

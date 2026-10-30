@@ -1,10 +1,27 @@
-import type { Metadata } from 'next';
+import type { Metadata, Viewport } from 'next';
 import './globals.css';
 
+export const viewport: Viewport = {
+  themeColor: '#10b981',
+  width: 'device-width',
+  initialScale: 1,
+  maximumScale: 1,
+};
+
 export const metadata: Metadata = {
-  title: 'FinControl Pro | Controle Financeiro Integrado ao Google Sheets',
+  title: 'Controle Financeiro',
   description:
-    'Sistema completo de controle financeiro mensal com entradas, saídas, contas a pagar/receber, despesas fixas, parcelamentos e sincronização com Google Sheets.',
+    'Controle financeiro simples com entradas, saídas e saldo nos bancos.',
+  manifest: '/manifest.json',
+  appleWebApp: {
+    capable: true,
+    statusBarStyle: 'black-translucent',
+    title: 'Financeiro',
+  },
+  icons: {
+    icon: '/icon.svg',
+    apple: '/icon.svg',
+  },
 };
 
 export default function RootLayout({

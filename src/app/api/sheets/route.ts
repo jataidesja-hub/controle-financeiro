@@ -68,6 +68,12 @@ export async function POST(request: NextRequest) {
       state.appsScriptUrl = scriptUrl;
     }
 
+    if (Array.isArray(body.clientDeletedIds)) {
+      state.deletedIds = Array.from(
+        new Set([...state.deletedIds, ...(body.clientDeletedIds as string[])])
+      );
+    }
+
     if (Array.isArray(body.banks)) {
       state.banks = body.banks as BankAccount[];
     }
@@ -128,7 +134,11 @@ export async function POST(request: NextRequest) {
       state.transactions = body.transactions as Transaction[];
     }
 
-    state.transactions.sort((a, b) => b.data.localeCompare(a.data));
+    const deletedSetFinal = new Set(state.deletedIds);
+    state.transactions = state.transactions
+      .filter((t) => !deletedSetFinal.has(t.id))
+      .sort((a, b) => b.data.localeCompare(a.data));
+
     const saved = await saveCloudState(state);
 
     let sheetSynced = false;

@@ -1,0 +1,19 @@
+{
+  "name": "Controle Financeiro",
+  "short_name": "Financeiro",
+  "description": "Controle simples de entradas, saídas e saldo nos bancos",
+  "start_url": "/",
+  "scope": "/",
+  "display": "standalone",
+  "orientation": "portrait",
+  "background_color": "#020617",
+  "theme_color": "#10b981",
+  "icons": [
+    {
+      "src": "/icon.svg",
+      "sizes": "any",
+      "type": "image/svg+xml",
+      "purpose": "any maskable"
+    }
+  ]
+}
