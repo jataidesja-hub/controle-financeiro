@@ -12,6 +12,13 @@ export type PaymentMethod =
   | 'Transferência'
   | 'Dinheiro';
 
+export interface BankAccount {
+  id: string;
+  nome: string;
+  cor: string;
+  saldoInicial: number;
+}
+
 export interface Transaction {
   id: string;
   data: string; // YYYY-MM-DD
@@ -25,6 +32,7 @@ export interface Transaction {
   recorrencia: RecurrenceType;
   parcela: string; // e.g., "1/1", "3/10"
   formaPagamento: PaymentMethod;
+  banco?: string; // Nome do banco de onde saiu / onde entrou quando Pago
   observacoes: string;
   criadoEm: string;
 }

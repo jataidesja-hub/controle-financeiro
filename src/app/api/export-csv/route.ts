@@ -24,6 +24,7 @@ export async function GET() {
     'Recorrencia',
     'Parcela',
     'FormaPagamento',
+    'Banco',
     'Observacoes',
     'CriadoEm',
   ];
@@ -44,6 +45,7 @@ export async function GET() {
         escapeCsvCell(tx.recorrencia || 'Única'),
         escapeCsvCell(tx.parcela || '1/1'),
         escapeCsvCell(tx.formaPagamento || 'PIX'),
+        escapeCsvCell(tx.banco || ''),
         escapeCsvCell(tx.observacoes || ''),
         escapeCsvCell(tx.criadoEm || ''),
       ].join(',')

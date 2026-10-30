@@ -4,6 +4,7 @@ import React, { useEffect, useMemo, useRef, useState } from 'react';
 import {
   ArrowDownCircle,
   ArrowUpCircle,
+  Building2,
   Calendar,
   Check,
   ChevronLeft,
@@ -11,6 +12,7 @@ import {
   Clock,
   Copy,
   Download,
+  Edit2,
   ExternalLink,
   FileSpreadsheet,
   FileUp,
@@ -27,9 +29,12 @@ import {
   APPS_SCRIPT_SNIPPET,
   DEFAULT_SPREADSHEET_ID,
   DEFAULT_SPREADSHEET_URL,
+  INITIAL_BANKS,
   INITIAL_CATEGORIES,
+  INITIAL_TRANSACTIONS,
 } from '@/data/initialData';
 import {
+  BankAccount,
   PaymentMethod,
   SyncSettings,
   Transaction,
@@ -43,9 +48,19 @@ import {
 
 const STORAGE_KEYS = {
   TRANSACTIONS: 'fincontrol_real_transactions_v2',
+  BANKS: 'fincontrol_banks_v2',
   DELETED_IDS: 'fincontrol_deleted_ids_v2',
   SETTINGS: 'fincontrol_sync_settings_v2',
 };
+
+const BANK_COLORS = [
+  '#8b5cf6', // Roxo (Nubank)
+  '#10b981', // Verde (PicPay)
+  '#f97316', // Laranja (Inter / Itaú)
+  '#3b82f6', // Azul (Caixa / BB)
+  '#ec4899', // Rosa
+  '#eab308', // Amarelo (C6 / BB)
+];
 
 const MONTH_NAMES: Record<string, string> = {
   '01': 'Janeiro',
@@ -112,6 +127,9 @@ function mergeTransactionsClient(
 ): Transaction[] {
   const delSet = new Set(deletedIds);
   const map = new Map<string, Transaction>();
+  for (const t of INITIAL_TRANSACTIONS) {
+    if (t && t.id && !delSet.has(t.id)) map.set(t.id, t);
+  }
   for (const t of remoteList) {
     if (t && t.id && !delSet.has(t.id)) map.set(t.id, t);
   }
@@ -158,6 +176,7 @@ function normalizeRemoteTransaction(
     formaPagamento: String(
       raw.FormaPagamento || raw.formaPagamento || 'PIX'
     ) as PaymentMethod,
+    banco: String(raw.Banco || raw.banco || ''),
     observacoes: String(raw.Observacoes || raw.observacoes || ''),
     criadoEm: String(raw.CriadoEm || raw.criadoEm || new Date().toISOString()),
   };
@@ -167,7 +186,9 @@ export default function FinanceiroSimplesApp() {
   const today = getTodayISO();
   const fileInputRef = useRef<HTMLInputElement | null>(null);
 
-  const [transactions, setTransactions] = useState<Transaction[]>([]);
+  const [transactions, setTransactions] =
+    useState<Transaction[]>(INITIAL_TRANSACTIONS);
+  const [banks, setBanks] = useState<BankAccount[]>(INITIAL_BANKS);
   const [deletedIds, setDeletedIds] = useState<string[]>([]);
   const [selectedMonth, setSelectedMonth] = useState<string>(today.slice(0, 7));
   const [filterTipo, setFilterTipo] = useState<
@@ -181,7 +202,18 @@ export default function FinanceiroSimplesApp() {
   const [categoria, setCategoria] = useState('Alimentação');
   const [data, setData] = useState(today);
   const [status, setStatus] = useState<TransactionStatus>('Pago');
+  const [bancoSelecionado, setBancoSelecionado] = useState<string>('Nubank');
   const [repetirMeses, setRepetirMeses] = useState<number>(1);
+
+  // Bank management modals / states
+  const [isAddBankOpen, setIsAddBankOpen] = useState(false);
+  const [newBankName, setNewBankName] = useState('');
+  const [newBankBalance, setNewBankBalance] = useState('');
+  const [editingBankId, setEditingBankId] = useState<string | null>(null);
+  const [editingBankBalanceVal, setEditingBankBalanceVal] = useState('');
+
+  // Modal: "Ao pagar uma conta, escolher de qual banco saiu"
+  const [payingTx, setPayingTx] = useState<Transaction | null>(null);
 
   // Google Sheets Sync & Bank Automation
   const [syncSettings, setSyncSettings] = useState<SyncSettings>({
@@ -203,7 +235,38 @@ export default function FinanceiroSimplesApp() {
   const [notifBanco, setNotifBanco] = useState<'Nubank' | 'PicPay'>('Nubank');
   const [notifTexto, setNotifTexto] = useState('');
 
-  // Change selected month AND keep the form date aligned with that month so entries never vanish
+  // Compute current balance of each bank:
+  // saldoAtual = bank.saldoInicial + sum(Entradas Pagas nesse banco) - sum(Saídas Pagas nesse banco)
+  const banksWithBalances = useMemo(() => {
+    return banks.map((b) => {
+      let entradasPagas = 0;
+      let saidasPagas = 0;
+      for (const tx of transactions) {
+        if (
+          tx.status === 'Pago' &&
+          tx.banco &&
+          tx.banco.toLowerCase() === b.nome.toLowerCase()
+        ) {
+          if (tx.tipo === 'Entrada') entradasPagas += tx.valor;
+          else saidasPagas += tx.valor;
+        }
+      }
+      const movimentacaoLiquida = entradasPagas - saidasPagas;
+      const saldoAtual = (b.saldoInicial || 0) + movimentacaoLiquida;
+      return {
+        ...b,
+        entradasPagas,
+        saidasPagas,
+        movimentacaoLiquida,
+        saldoAtual,
+      };
+    });
+  }, [banks, transactions]);
+
+  const totalSaldoBancos = useMemo(() => {
+    return banksWithBalances.reduce((acc, b) => acc + b.saldoAtual, 0);
+  }, [banksWithBalances]);
+
   function handleSelectMonth(nextMonth: string) {
     setSelectedMonth(nextMonth);
     if (nextMonth !== 'ALL') {
@@ -220,19 +283,12 @@ export default function FinanceiroSimplesApp() {
 
   // Load saved real data from localStorage AND merge with shared Cloud Store
   useEffect(() => {
-    let localList: Transaction[] = [];
+    let localList: Transaction[] = INITIAL_TRANSACTIONS;
+    let localBanks: BankAccount[] = INITIAL_BANKS;
     let localDeleted: string[] = [];
     try {
       localStorage.removeItem('fincontrol_transactions_v1');
 
-      const saved = localStorage.getItem(STORAGE_KEYS.TRANSACTIONS);
-      if (saved) {
-        const parsed = JSON.parse(saved);
-        if (Array.isArray(parsed)) {
-          localList = parsed;
-          setTransactions(parsed);
-        }
-      }
       const savedDel = localStorage.getItem(STORAGE_KEYS.DELETED_IDS);
       if (savedDel) {
         const parsedDel = JSON.parse(savedDel);
@@ -241,6 +297,30 @@ export default function FinanceiroSimplesApp() {
           setDeletedIds(parsedDel);
         }
       }
+
+      const saved = localStorage.getItem(STORAGE_KEYS.TRANSACTIONS);
+      if (saved) {
+        const parsed = JSON.parse(saved);
+        if (Array.isArray(parsed)) {
+          localList = mergeTransactionsClient(
+            parsed,
+            INITIAL_TRANSACTIONS,
+            localDeleted
+          );
+          setTransactions(localList);
+        }
+      }
+
+      const savedBanks = localStorage.getItem(STORAGE_KEYS.BANKS);
+      if (savedBanks) {
+        const parsedBanks = JSON.parse(savedBanks);
+        if (Array.isArray(parsedBanks) && parsedBanks.length > 0) {
+          localBanks = parsedBanks;
+          setBanks(parsedBanks);
+          setBancoSelecionado(parsedBanks[0].nome);
+        }
+      }
+
       const savedSet = localStorage.getItem(STORAGE_KEYS.SETTINGS);
       if (savedSet) {
         setSyncSettings((prev) => ({ ...prev, ...JSON.parse(savedSet) }));
@@ -259,6 +339,7 @@ export default function FinanceiroSimplesApp() {
             action: 'merge',
             transactions: localList,
             clientTransactions: localList,
+            banks: localBanks,
           }),
         });
         const json = await res.json();
@@ -270,6 +351,9 @@ export default function FinanceiroSimplesApp() {
           setTransactions((prev) =>
             mergeTransactionsClient(prev, json.transactions, allDeleted)
           );
+          if (Array.isArray(json.banks) && json.banks.length > 0) {
+            setBanks(json.banks);
+          }
           if (json.appsScriptUrl) {
             setSyncSettings((prev) => ({
               ...prev,
@@ -301,6 +385,14 @@ export default function FinanceiroSimplesApp() {
 
   useEffect(() => {
     try {
+      localStorage.setItem(STORAGE_KEYS.BANKS, JSON.stringify(banks));
+    } catch (e) {
+      console.error(e);
+    }
+  }, [banks]);
+
+  useEffect(() => {
+    try {
       localStorage.setItem(
         STORAGE_KEYS.DELETED_IDS,
         JSON.stringify(deletedIds)
@@ -320,7 +412,8 @@ export default function FinanceiroSimplesApp() {
 
   async function pushToSheets(
     payload: Record<string, unknown>,
-    currentList: Transaction[]
+    currentList: Transaction[],
+    currentBanks: BankAccount[] = banks
   ) {
     try {
       setIsSyncing(true);
@@ -330,6 +423,7 @@ export default function FinanceiroSimplesApp() {
         body: JSON.stringify({
           scriptUrl: syncSettings.appsScriptUrl,
           clientTransactions: currentList,
+          banks: currentBanks,
           ...payload,
         }),
       });
@@ -380,11 +474,14 @@ export default function FinanceiroSimplesApp() {
         setTransactions((prev) =>
           mergeTransactionsClient(prev, list, allDeleted)
         );
+        if (Array.isArray(json.banks) && json.banks.length > 0) {
+          setBanks(json.banks);
+        }
         setSyncSettings((prev) => ({
           ...prev,
           lastSyncAt: new Date().toISOString(),
         }));
-        setSyncMsg(`Pronto! Dados sincronizados com sucesso.`);
+        setSyncMsg('Pronto! Dados sincronizados com sucesso.');
       } else {
         setSyncMsg(json.error || 'Erro ao sincronizar.');
       }
@@ -393,6 +490,56 @@ export default function FinanceiroSimplesApp() {
     } finally {
       setIsSyncing(false);
     }
+  }
+
+  // Add a new bank account
+  async function handleAddBank(e: React.FormEvent) {
+    e.preventDefault();
+    const trimmed = newBankName.trim();
+    if (!trimmed) return;
+    const desiredBalance =
+      parseFloat(newBankBalance.replace(',', '.')) || 0;
+
+    const newBank: BankAccount = {
+      id: `bank-${Date.now().toString().slice(-5)}`,
+      nome: trimmed,
+      cor: BANK_COLORS[banks.length % BANK_COLORS.length],
+      saldoInicial: desiredBalance,
+    };
+
+    const nextBanks = [...banks, newBank];
+    setBanks(nextBanks);
+    setBancoSelecionado(newBank.nome);
+    setNewBankName('');
+    setNewBankBalance('');
+    setIsAddBankOpen(false);
+    await pushToSheets({ action: 'updateBanks' }, transactions, nextBanks);
+  }
+
+  // Set exact current balance for a bank
+  async function handleSaveBankBalance(bankId: string) {
+    const target = banksWithBalances.find((b) => b.id === bankId);
+    if (!target) return;
+    const desiredSaldoAtual =
+      parseFloat(editingBankBalanceVal.replace(',', '.')) || 0;
+    // Since saldoAtual = saldoInicial + movimentacaoLiquida,
+    // to make saldoAtual equal desiredSaldoAtual right now:
+    const newSaldoInicial = desiredSaldoAtual - target.movimentacaoLiquida;
+    const nextBanks = banks.map((b) =>
+      b.id === bankId ? { ...b, saldoInicial: newSaldoInicial } : b
+    );
+    setBanks(nextBanks);
+    setEditingBankId(null);
+    setEditingBankBalanceVal('');
+    await pushToSheets({ action: 'updateBanks' }, transactions, nextBanks);
+  }
+
+  async function handleDeleteBank(bankId: string) {
+    if (banks.length <= 1) return;
+    const nextBanks = banks.filter((b) => b.id !== bankId);
+    setBanks(nextBanks);
+    if (nextBanks[0]) setBancoSelecionado(nextBanks[0].nome);
+    await pushToSheets({ action: 'updateBanks' }, transactions, nextBanks);
   }
 
   // Option 1: Import CSV / OFX from Nubank or PicPay
@@ -445,39 +592,20 @@ export default function FinanceiroSimplesApp() {
       );
       return;
     }
+    tx.banco = notifBanco;
     const updatedList = [tx, ...transactions];
     setTransactions(updatedList);
     handleSelectMonth(tx.mesAno);
     setNotifTexto('');
     setIsBankModalOpen(false);
     setBannerNotice(
-      `Lançamento automático criado: ${tx.descricao} (${formatCurrency(
+      `Lançamento automático criado em ${notifBanco}: ${tx.descricao} (${formatCurrency(
         tx.valor
       )})`
     );
     setTimeout(() => setBannerNotice(null), 5000);
 
     await pushToSheets({ action: 'add', transaction: tx }, updatedList);
-  }
-
-  async function pullRecentWebhookNotifications() {
-    try {
-      const res = await fetch('/api/sheets');
-      const json = await res.json();
-      if (json.ok && Array.isArray(json.transactions)) {
-        const allDeleted = Array.from(
-          new Set([...deletedIds, ...(json.deletedIds || [])])
-        );
-        setDeletedIds(allDeleted);
-        setTransactions((prev) =>
-          mergeTransactionsClient(prev, json.transactions, allDeleted)
-        );
-        setBannerNotice('Dados sincronizados entre computador, celular e planilha!');
-        setTimeout(() => setBannerNotice(null), 4000);
-      }
-    } catch {
-      // ignore
-    }
   }
 
   async function handleAddTransaction(e: React.FormEvent) {
@@ -492,6 +620,7 @@ export default function FinanceiroSimplesApp() {
 
     for (let i = 0; i < count; i++) {
       const targetDate = i === 0 ? data : addMonthsToDate(data, i);
+      const itemStatus: TransactionStatus = i === 0 ? status : 'Pendente';
       createdBatch.push({
         id:
           count === 1
@@ -506,11 +635,12 @@ export default function FinanceiroSimplesApp() {
         tipo,
         categoria,
         valor: numericVal,
-        status: i === 0 ? status : 'Pendente',
+        status: itemStatus,
         vencimento: targetDate,
         recorrencia: count > 1 ? 'Parcelada' : 'Única',
         parcela: `${i + 1}/${count}`,
         formaPagamento: 'PIX',
+        banco: itemStatus === 'Pago' ? bancoSelecionado : '',
         observacoes: count > 1 ? `Lançado para ${count} meses` : '',
         criadoEm: new Date().toISOString(),
       });
@@ -526,7 +656,9 @@ export default function FinanceiroSimplesApp() {
       setBannerNotice(
         `${tipo} "${createdBatch[0].descricao}" (${formatCurrency(
           numericVal
-        )}) salva em ${formatMonthLabel(createdBatch[0].mesAno)}!`
+        )}) salva como ${createdBatch[0].status}${
+          createdBatch[0].banco ? ` (${createdBatch[0].banco})` : ''
+        }!`
       );
       setTimeout(() => setBannerNotice(null), 4000);
       await pushToSheets(
@@ -545,10 +677,54 @@ export default function FinanceiroSimplesApp() {
     }
   }
 
-  async function handleToggleStatus(tx: Transaction) {
+  // Click on Status badge:
+  // If Pendente -> open "De qual banco saiu / Onde entrou?" picker!
+  // If Pago -> revert to Pendente (refunding the bank balance automatically!)
+  async function handleStatusClick(tx: Transaction) {
+    if (tx.status === 'Pendente') {
+      setPayingTx(tx);
+      return;
+    }
+    // Revert from Pago to Pendente
     const updated: Transaction = {
       ...tx,
-      status: tx.status === 'Pago' ? 'Pendente' : 'Pago',
+      status: 'Pendente',
+      banco: '',
+    };
+    const updatedList = transactions.map((t) =>
+      t.id === tx.id ? updated : t
+    );
+    setTransactions(updatedList);
+    await pushToSheets({ action: 'update', transaction: updated }, updatedList);
+  }
+
+  // Confirm payment of a pending bill with chosen bank
+  async function handleConfirmPaymentWithBank(bankName: string) {
+    if (!payingTx) return;
+    const updated: Transaction = {
+      ...payingTx,
+      status: 'Pago',
+      banco: bankName,
+    };
+    const updatedList = transactions.map((t) =>
+      t.id === payingTx.id ? updated : t
+    );
+    setTransactions(updatedList);
+    setPayingTx(null);
+    setBannerNotice(
+      `"${updated.descricao}" marcada como Pago (${
+        updated.tipo === 'Saída' ? 'Saiu de' : 'Entrou em'
+      }: ${bankName})!`
+    );
+    setTimeout(() => setBannerNotice(null), 4000);
+    await pushToSheets({ action: 'update', transaction: updated }, updatedList);
+  }
+
+  // Change bank of an already-paid transaction
+  async function handleChangeTransactionBank(tx: Transaction, newBankName: string) {
+    const updated: Transaction = {
+      ...tx,
+      banco: newBankName,
     };
     const updatedList = transactions.map((t) =>
       t.id === tx.id ? updated : t
@@ -581,17 +757,35 @@ export default function FinanceiroSimplesApp() {
       .sort((a, b) => b.data.localeCompare(a.data));
   }, [monthTransactions, filterTipo]);
 
+  // IMPORTANT RULE:
+  // Pending bills DO NOT charge from the real balance!
+  // Only status === 'Pago' counts in Entradas Pagas, Saídas Pagas, and Saldo Real!
   const totals = useMemo(() => {
-    let entradas = 0;
-    let saidas = 0;
+    let entradasPagas = 0;
+    let entradasPendentes = 0;
+    let saidasPagas = 0;
+    let saidasPendentes = 0;
+
     for (const t of monthTransactions) {
-      if (t.tipo === 'Entrada') entradas += t.valor;
-      else saidas += t.valor;
+      if (t.tipo === 'Entrada') {
+        if (t.status === 'Pago') entradasPagas += t.valor;
+        else entradasPendentes += t.valor;
+      } else {
+        if (t.status === 'Pago') saidasPagas += t.valor;
+        else saidasPendentes += t.valor;
+      }
     }
+    const saldoReal = entradasPagas - saidasPagas;
+    const saldoPrevisto =
+      entradasPagas + entradasPendentes - (saidasPagas + saidasPendentes);
+
     return {
-      entradas,
-      saidas,
-      saldo: entradas - saidas,
+      entradasPagas,
+      entradasPendentes,
+      saidasPagas,
+      saidasPendentes,
+      saldoReal,
+      saldoPrevisto,
     };
   }, [monthTransactions]);
 
@@ -623,7 +817,7 @@ export default function FinanceiroSimplesApp() {
         className="hidden"
       />
 
-      {/* Header simples */}
+      {/* Header */}
       <header className="border-b border-slate-800 bg-slate-900/80">
         <div className="max-w-4xl mx-auto px-4 py-3.5 flex flex-wrap items-center justify-between gap-3">
           <div className="flex items-center gap-2.5">
@@ -684,7 +878,7 @@ export default function FinanceiroSimplesApp() {
             </button>
           </div>
 
-          {/* Ações rápidas: Nubank/PicPay + Planilha */}
+          {/* Ações rápidas */}
           <div className="flex flex-wrap items-center gap-2">
             <button
               type="button"
@@ -748,39 +942,215 @@ export default function FinanceiroSimplesApp() {
           </div>
         )}
 
-        {/* 3 Cards Diretos: Entradas, Saídas e Saldo */}
+        {/* SEÇÃO: MEUS BANCOS E SALDO EM CONTA */}
+        <section className="rounded-2xl bg-slate-900 border border-slate-800 p-4 space-y-3">
+          <div className="flex flex-wrap items-center justify-between gap-2">
+            <div className="flex items-center gap-2">
+              <Building2 className="w-4 h-4 text-emerald-400" />
+              <h2 className="text-xs sm:text-sm font-bold uppercase tracking-wider text-slate-200">
+                Meus Bancos • Saldo Total: {formatCurrency(totalSaldoBancos)}
+              </h2>
+            </div>
+            <button
+              type="button"
+              onClick={() => setIsAddBankOpen((v) => !v)}
+              className="inline-flex items-center gap-1 px-2.5 py-1 rounded-lg text-xs font-bold bg-emerald-500/20 hover:bg-emerald-500/30 text-emerald-300 border border-emerald-500/30 transition cursor-pointer"
+            >
+              <Plus className="w-3.5 h-3.5" />
+              <span>Adicionar Banco</span>
+            </button>
+          </div>
+
+          {isAddBankOpen && (
+            <form
+              onSubmit={handleAddBank}
+              className="p-3 rounded-xl bg-slate-950 border border-slate-800 flex flex-wrap items-end gap-2.5"
+            >
+              <div className="flex-1 min-w-[150px]">
+                <label className="block text-[11px] text-slate-400 mb-1">
+                  Nome do Banco (ex: Itaú, Caixa, Inter)
+                </label>
+                <input
+                  type="text"
+                  required
+                  value={newBankName}
+                  onChange={(e) => setNewBankName(e.target.value)}
+                  placeholder="Ex: Itaú"
+                  className="w-full px-3 py-1.5 bg-slate-900 border border-slate-700 rounded-lg text-xs text-white"
+                />
+              </div>
+              <div className="w-36">
+                <label className="block text-[11px] text-slate-400 mb-1">
+                  Saldo Atual (R$)
+                </label>
+                <input
+                  type="number"
+                  step="0.01"
+                  value={newBankBalance}
+                  onChange={(e) => setNewBankBalance(e.target.value)}
+                  placeholder="0,00"
+                  className="w-full px-3 py-1.5 bg-slate-900 border border-slate-700 rounded-lg text-xs text-white"
+                />
+              </div>
+              <button
+                type="submit"
+                className="px-3.5 py-1.5 rounded-lg text-xs font-bold bg-emerald-500 text-slate-950 cursor-pointer"
+              >
+                Salvar Banco
+              </button>
+              <button
+                type="button"
+                onClick={() => setIsAddBankOpen(false)}
+                className="px-2.5 py-1.5 rounded-lg text-xs text-slate-400 hover:text-white cursor-pointer"
+              >
+                Cancelar
+              </button>
+            </form>
+          )}
+
+          <div className="grid grid-cols-1 sm:grid-cols-2 md:grid-cols-3 gap-2.5">
+            {banksWithBalances.map((b) => (
+              <div
+                key={b.id}
+                className="p-3 rounded-xl bg-slate-950 border border-slate-800 flex flex-col justify-between gap-2"
+              >
+                <div className="flex items-center justify-between">
+                  <div className="flex items-center gap-2">
+                    <span
+                      className="w-2.5 h-2.5 rounded-full"
+                      style={{ backgroundColor: b.cor }}
+                    />
+                    <span className="font-bold text-sm text-white">
+                      {b.nome}
+                    </span>
+                  </div>
+                  <div className="flex items-center gap-1">
+                    <button
+                      type="button"
+                      onClick={() => {
+                        setEditingBankId(b.id);
+                        setEditingBankBalanceVal(String(b.saldoAtual));
+                      }}
+                      className="inline-flex items-center gap-1 px-2 py-0.5 rounded bg-slate-800 hover:bg-slate-700 text-[11px] text-slate-300 cursor-pointer"
+                      title="Ajustar saldo deste banco"
+                    >
+                      <Edit2 className="w-2.5 h-2.5" /> Saldo
+                    </button>
+                    {banks.length > 1 && (
+                      <button
+                        type="button"
+                        onClick={() => handleDeleteBank(b.id)}
+                        className="p-1 text-slate-500 hover:text-rose-400 cursor-pointer"
+                        title="Remover banco"
+                      >
+                        <Trash2 className="w-3 h-3" />
+                      </button>
+                    )}
+                  </div>
+                </div>
+
+                {editingBankId === b.id ? (
+                  <div className="flex items-center gap-1.5 pt-1">
+                    <input
+                      type="number"
+                      step="0.01"
+                      autoFocus
+                      value={editingBankBalanceVal}
+                      onChange={(e) => setEditingBankBalanceVal(e.target.value)}
+                      className="w-full px-2 py-1 bg-slate-900 border border-emerald-500 rounded text-xs text-white"
+                      placeholder="Saldo atual (R$)"
+                    />
+                    <button
+                      type="button"
+                      onClick={() => handleSaveBankBalance(b.id)}
+                      className="px-2.5 py-1 rounded bg-emerald-500 text-slate-950 text-xs font-bold cursor-pointer"
+                    >
+                      OK
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => setEditingBankId(null)}
+                      className="p-1 text-slate-400 hover:text-white cursor-pointer"
+                    >
+                      <X className="w-3.5 h-3.5" />
+                    </button>
+                  </div>
+                ) : (
+                  <div>
+                    <div
+                      className={`text-lg font-bold ${
+                        b.saldoAtual >= 0 ? 'text-emerald-400' : 'text-rose-400'
+                      }`}
+                    >
+                      {formatCurrency(b.saldoAtual)}
+                    </div>
+                    <p className="text-[11px] text-slate-500">
+                      Saídas pagas daqui: {formatCurrency(b.saidasPagas)}
+                    </p>
+                  </div>
+                )}
+              </div>
+            ))}
+          </div>
+        </section>
+
+        {/* 3 Cards Diretos: Entradas Recebidas, Saídas Pagas e Saldo Real (Pendentes NÃO cobram antes de pagar!) */}
         <section className="grid grid-cols-1 sm:grid-cols-3 gap-3.5">
           <div className="rounded-2xl bg-slate-900 border border-slate-800 p-4">
             <div className="flex items-center justify-between text-xs text-slate-400 mb-1">
-              <span>ENTRADAS ({formatMonthLabel(selectedMonth)})</span>
+              <span>ENTRADAS RECEBIDAS</span>
               <ArrowUpCircle className="w-4 h-4 text-emerald-400" />
             </div>
             <div className="text-2xl font-bold text-emerald-400">
-              {formatCurrency(totals.entradas)}
+              {formatCurrency(totals.entradasPagas)}
+            </div>
+            <div className="text-[11px] text-slate-400 mt-1">
+              Pendente a receber:{' '}
+              <span className="text-amber-400 font-semibold">
+                {formatCurrency(totals.entradasPendentes)}
+              </span>
             </div>
           </div>
 
           <div className="rounded-2xl bg-slate-900 border border-slate-800 p-4">
             <div className="flex items-center justify-between text-xs text-slate-400 mb-1">
-              <span>SAÍDAS ({formatMonthLabel(selectedMonth)})</span>
+              <span>SAÍDAS PAGAS</span>
               <ArrowDownCircle className="w-4 h-4 text-rose-400" />
             </div>
             <div className="text-2xl font-bold text-rose-400">
-              {formatCurrency(totals.saidas)}
+              {formatCurrency(totals.saidasPagas)}
+            </div>
+            <div className="text-[11px] text-slate-400 mt-1">
+              Pendente a pagar (não cobrado):{' '}
+              <span className="text-amber-400 font-semibold">
+                {formatCurrency(totals.saidasPendentes)}
+              </span>
             </div>
           </div>
 
           <div className="rounded-2xl bg-slate-900 border border-slate-800 p-4">
             <div className="flex items-center justify-between text-xs text-slate-400 mb-1">
-              <span>SALDO ({formatMonthLabel(selectedMonth)})</span>
+              <span>SALDO REAL ({formatMonthLabel(selectedMonth)})</span>
               <Wallet className="w-4 h-4 text-sky-400" />
             </div>
             <div
               className={`text-2xl font-bold ${
-                totals.saldo >= 0 ? 'text-white' : 'text-rose-400'
+                totals.saldoReal >= 0 ? 'text-white' : 'text-rose-400'
               }`}
             >
-              {formatCurrency(totals.saldo)}
+              {formatCurrency(totals.saldoReal)}
+            </div>
+            <div className="text-[11px] text-slate-400 mt-1">
+              Após pagar pendentes:{' '}
+              <span
+                className={
+                  totals.saldoPrevisto >= 0
+                    ? 'text-slate-300 font-semibold'
+                    : 'text-rose-400 font-semibold'
+                }
+              >
+                {formatCurrency(totals.saldoPrevisto)}
+              </span>
             </div>
           </div>
         </section>
@@ -919,9 +1289,29 @@ export default function FinanceiroSimplesApp() {
                         : 'bg-slate-950 text-slate-400 border border-slate-800'
                     }`}
                   >
-                    Pendente
+                    Pendente (Não cobra ainda)
                   </button>
                 </div>
+
+                {/* Se já estiver Pago, escolher de qual banco saiu / onde entrou */}
+                {status === 'Pago' && (
+                  <div className="flex items-center gap-1.5">
+                    <span className="text-slate-400">
+                      {tipo === 'Saída' ? 'Saiu do banco:' : 'Entrou no banco:'}
+                    </span>
+                    <select
+                      value={bancoSelecionado}
+                      onChange={(e) => setBancoSelecionado(e.target.value)}
+                      className="px-2.5 py-1 bg-slate-950 border border-emerald-500/40 rounded-lg text-xs text-emerald-300 font-semibold focus:outline-none"
+                    >
+                      {banks.map((b) => (
+                        <option key={b.id} value={b.nome}>
+                          {b.nome}
+                        </option>
+                      ))}
+                    </select>
+                  </div>
+                )}
 
                 {/* Repetir nos próximos meses */}
                 <div className="flex items-center gap-1.5">
@@ -1010,13 +1400,15 @@ export default function FinanceiroSimplesApp() {
               {filteredList.map((tx) => (
                 <div
                   key={tx.id}
-                  className="py-3 flex items-center justify-between gap-3"
+                  className="py-3 flex flex-wrap sm:flex-nowrap items-center justify-between gap-3"
                 >
                   <div className="flex items-center gap-3 min-w-0">
                     <div
                       className={`w-8 h-8 rounded-lg flex items-center justify-center shrink-0 ${
                         tx.tipo === 'Entrada'
                           ? 'bg-emerald-500/15 text-emerald-400'
+                          : tx.status === 'Pendente'
+                          ? 'bg-amber-500/15 text-amber-400'
                           : 'bg-rose-500/15 text-rose-400'
                       }`}
                     >
@@ -1036,28 +1428,58 @@ export default function FinanceiroSimplesApp() {
                     </div>
                   </div>
 
-                  <div className="flex items-center gap-3 shrink-0">
+                  <div className="flex items-center gap-2.5 shrink-0 ml-auto">
+                    {/* Se já estiver Pago, permite ver/trocar de qual banco saiu */}
+                    {tx.status === 'Pago' && (
+                      <select
+                        value={tx.banco || ''}
+                        onChange={(e) =>
+                          handleChangeTransactionBank(tx, e.target.value)
+                        }
+                        className="px-2 py-0.5 rounded bg-slate-950 border border-slate-800 text-[11px] text-slate-300 focus:outline-none focus:border-emerald-500"
+                        title="Banco de onde saiu / onde entrou"
+                      >
+                        <option value="">Sem banco</option>
+                        {banks.map((b) => (
+                          <option key={b.id} value={b.nome}>
+                            {tx.tipo === 'Saída' ? `Saiu: ${b.nome}` : `Entrou: ${b.nome}`}
+                          </option>
+                        ))}
+                      </select>
+                    )}
+
                     <button
                       type="button"
-                      onClick={() => handleToggleStatus(tx)}
-                      className={`inline-flex items-center gap-1 px-2 py-0.5 rounded-md text-xs font-medium cursor-pointer ${
+                      onClick={() => handleStatusClick(tx)}
+                      className={`inline-flex items-center gap-1 px-2.5 py-1 rounded-md text-xs font-semibold cursor-pointer transition ${
                         tx.status === 'Pago'
-                          ? 'bg-emerald-500/15 text-emerald-400'
-                          : 'bg-amber-500/15 text-amber-400'
+                          ? 'bg-emerald-500/15 text-emerald-400 hover:bg-emerald-500/25'
+                          : 'bg-amber-500/20 text-amber-300 border border-amber-500/40 hover:bg-amber-500/30'
                       }`}
-                      title="Clique para alternar Pago / Pendente"
+                      title={
+                        tx.status === 'Pendente'
+                          ? 'Clique para pagar e escolher de qual banco saiu'
+                          : 'Clique para voltar para Pendente'
+                      }
                     >
                       {tx.status === 'Pago' ? (
-                        <Check className="w-3 h-3" />
+                        <>
+                          <Check className="w-3 h-3" />
+                          <span>Pago</span>
+                        </>
                       ) : (
-                        <Clock className="w-3 h-3" />
+                        <>
+                          <Clock className="w-3 h-3" />
+                          <span>Pendente (Pagar)</span>
+                        </>
                       )}
-                      {tx.status}
                     </button>
 
                     <span
                       className={`text-sm font-bold min-w-[95px] text-right ${
-                        tx.tipo === 'Entrada'
+                        tx.status === 'Pendente'
+                          ? 'text-amber-300/80'
+                          : tx.tipo === 'Entrada'
                           ? 'text-emerald-400'
                           : 'text-rose-400'
                       }`}
@@ -1081,6 +1503,84 @@ export default function FinanceiroSimplesApp() {
           )}
         </section>
       </main>
+
+      {/* MODAL RÁPIDO: ESCOLHER DE QUAL BANCO SAIU AO PAGAR CONTA PENDENTE */}
+      {payingTx && (
+        <div className="fixed inset-0 z-50 bg-black/75 flex items-center justify-center p-4">
+          <div className="bg-slate-900 border border-slate-800 rounded-2xl max-w-md w-full p-5 space-y-4 shadow-2xl">
+            <div className="flex items-center justify-between">
+              <h3 className="font-bold text-white text-base">
+                {payingTx.tipo === 'Saída'
+                  ? 'De qual banco saiu este pagamento?'
+                  : 'Em qual banco entrou este valor?'}
+              </h3>
+              <button
+                type="button"
+                onClick={() => setPayingTx(null)}
+                className="p-1 text-slate-400 hover:text-white"
+              >
+                <X className="w-5 h-5" />
+              </button>
+            </div>
+
+            <div className="p-3 rounded-xl bg-slate-950 border border-slate-800 flex items-center justify-between">
+              <div>
+                <p className="text-sm font-bold text-white">
+                  {payingTx.descricao}
+                </p>
+                <p className="text-xs text-slate-400">{payingTx.categoria}</p>
+              </div>
+              <span
+                className={`text-base font-bold ${
+                  payingTx.tipo === 'Entrada'
+                    ? 'text-emerald-400'
+                    : 'text-rose-400'
+                }`}
+              >
+                {formatCurrency(payingTx.valor)}
+              </span>
+            </div>
+
+            <div className="space-y-2">
+              <p className="text-xs text-slate-400">
+                Selecione o banco abaixo para confirmar e descontar do saldo:
+              </p>
+              <div className="grid grid-cols-1 gap-2">
+                {banksWithBalances.map((b) => (
+                  <button
+                    key={b.id}
+                    type="button"
+                    onClick={() => handleConfirmPaymentWithBank(b.nome)}
+                    className="w-full p-3 rounded-xl bg-slate-950 hover:bg-slate-800 border border-slate-800 hover:border-emerald-500/50 flex items-center justify-between transition cursor-pointer"
+                  >
+                    <div className="flex items-center gap-2.5">
+                      <span
+                        className="w-3 h-3 rounded-full"
+                        style={{ backgroundColor: b.cor }}
+                      />
+                      <span className="font-bold text-sm text-white">
+                        {b.nome}
+                      </span>
+                    </div>
+                    <span className="text-xs text-slate-300">
+                      Saldo atual:{' '}
+                      <strong
+                        className={
+                          b.saldoAtual >= 0
+                            ? 'text-emerald-400'
+                            : 'text-rose-400'
+                        }
+                      >
+                        {formatCurrency(b.saldoAtual)}
+                      </strong>
+                    </span>
+                  </button>
+                ))}
+              </div>
+            </div>
+          </div>
+        </div>
+      )}
 
       {/* MODAL: AUTOMAÇÃO NUBANK & PICPAY */}
       {isBankModalOpen && (
@@ -1156,14 +1656,7 @@ export default function FinanceiroSimplesApp() {
                 placeholder="Ex: Compra de R$ 48,90 aprovada em SUPERMERCADO ou Pix recebido de R$ 250,00"
                 className="w-full px-3 py-2 bg-slate-900 border border-slate-700 rounded-xl text-xs text-white"
               />
-              <div className="flex items-center justify-between gap-2">
-                <button
-                  type="button"
-                  onClick={pullRecentWebhookNotifications}
-                  className="px-3 py-1.5 rounded-lg text-xs font-medium bg-slate-800 hover:bg-slate-700 text-slate-200 cursor-pointer"
-                >
-                  Sincronizar Nuvem Agora
-                </button>
+              <div className="flex items-center justify-end gap-2">
                 <button
                   type="submit"
                   className="px-4 py-1.5 rounded-lg text-xs font-bold bg-emerald-500 hover:bg-emerald-400 text-slate-950 cursor-pointer"

@@ -1,8 +1,13 @@
-import { CategoryBudget, Transaction } from '@/types/finance';
+import { BankAccount, CategoryBudget, Transaction } from '@/types/finance';
 
 export const DEFAULT_SPREADSHEET_ID = '1f6IEJX59z5a5RXQ9npojHFEJjhIYmtyHv2f70olqoJU';
 export const DEFAULT_SPREADSHEET_URL =
   'https://docs.google.com/spreadsheets/d/1f6IEJX59z5a5RXQ9npojHFEJjhIYmtyHv2f70olqoJU/edit?gid=0#gid=0';
+
+export const INITIAL_BANKS: BankAccount[] = [
+  { id: 'bank-nubank', nome: 'Nubank', cor: '#8b5cf6', saldoInicial: 0 },
+  { id: 'bank-picpay', nome: 'PicPay', cor: '#10b981', saldoInicial: 0 },
+];
 
 export const INITIAL_CATEGORIES: CategoryBudget[] = [
   { categoria: 'Salário', tipo: 'Entrada', orcamentoMensal: 0, corHex: '#10b981' },
@@ -18,11 +23,475 @@ export const INITIAL_CATEGORIES: CategoryBudget[] = [
   { categoria: 'Outros', tipo: 'Saída', orcamentoMensal: 0, corHex: '#64748b' },
 ];
 
-export const INITIAL_TRANSACTIONS: Transaction[] = [];
+export const INITIAL_TRANSACTIONS: Transaction[] = [
+  {
+    id: 'TX-12174-6',
+    data: '2027-04-30',
+    mesAno: '2027-04',
+    descricao: 'Salário (6/6)',
+    tipo: 'Entrada',
+    categoria: 'Salário',
+    valor: 3750,
+    status: 'Pendente',
+    vencimento: '2027-04-30',
+    recorrencia: 'Parcelada',
+    parcela: '6/6',
+    formaPagamento: 'PIX',
+    observacoes: 'Lançado para 6 meses',
+    criadoEm: '2026-10-30T16:11:52.174Z',
+  },
+  {
+    id: 'TX-37989-6',
+    data: '2027-04-30',
+    mesAno: '2027-04',
+    descricao: 'Cartão Ingrid (6/6)',
+    tipo: 'Saída',
+    categoria: 'Contas (Luz/Água/Internet)',
+    valor: 100,
+    status: 'Pendente',
+    vencimento: '2027-04-30',
+    recorrencia: 'Parcelada',
+    parcela: '6/6',
+    formaPagamento: 'PIX',
+    observacoes: 'Lançado para 6 meses',
+    criadoEm: '2026-10-30T16:10:37.989Z',
+  },
+  {
+    id: 'TX-12174-5',
+    data: '2027-03-30',
+    mesAno: '2027-03',
+    descricao: 'Salário (5/6)',
+    tipo: 'Entrada',
+    categoria: 'Salário',
+    valor: 3750,
+    status: 'Pendente',
+    vencimento: '2027-03-30',
+    recorrencia: 'Parcelada',
+    parcela: '5/6',
+    formaPagamento: 'PIX',
+    observacoes: 'Lançado para 6 meses',
+    criadoEm: '2026-10-30T16:11:52.174Z',
+  },
+  {
+    id: 'TX-89463-6',
+    data: '2027-03-30',
+    mesAno: '2027-03',
+    descricao: 'Luz (6/6)',
+    tipo: 'Saída',
+    categoria: 'Contas (Luz/Água/Internet)',
+    valor: 250,
+    status: 'Pendente',
+    vencimento: '2027-03-30',
+    recorrencia: 'Parcelada',
+    parcela: '6/6',
+    formaPagamento: 'PIX',
+    observacoes: 'Lançado para 6 meses',
+    criadoEm: '2026-10-30T16:09:49.463Z',
+  },
+  {
+    id: 'TX-75665-6',
+    data: '2027-03-30',
+    mesAno: '2027-03',
+    descricao: 'Aluguel (6/6)',
+    tipo: 'Saída',
+    categoria: 'Contas (Luz/Água/Internet)',
+    valor: 550,
+    status: 'Pendente',
+    vencimento: '2027-03-30',
+    recorrencia: 'Parcelada',
+    parcela: '6/6',
+    formaPagamento: 'PIX',
+    observacoes: 'Lançado para 6 meses',
+    criadoEm: '2026-10-30T16:09:35.665Z',
+  },
+  {
+    id: 'TX-32483-6',
+    data: '2027-03-30',
+    mesAno: '2027-03',
+    descricao: 'Emprestimo (6/6)',
+    tipo: 'Saída',
+    categoria: 'Outros',
+    valor: 377,
+    status: 'Pendente',
+    vencimento: '2027-03-30',
+    recorrencia: 'Parcelada',
+    parcela: '6/6',
+    formaPagamento: 'PIX',
+    observacoes: 'Lançado para 6 meses',
+    criadoEm: '2026-10-30T16:08:52.483Z',
+  },
+  {
+    id: 'TX-12174-4',
+    data: '2027-02-28',
+    mesAno: '2027-02',
+    descricao: 'Salário (4/6)',
+    tipo: 'Entrada',
+    categoria: 'Salário',
+    valor: 3750,
+    status: 'Pendente',
+    vencimento: '2027-02-28',
+    recorrencia: 'Parcelada',
+    parcela: '4/6',
+    formaPagamento: 'PIX',
+    observacoes: 'Lançado para 6 meses',
+    criadoEm: '2026-10-30T16:11:52.174Z',
+  },
+  {
+    id: 'TX-89463-5',
+    data: '2027-02-28',
+    mesAno: '2027-02',
+    descricao: 'Luz (5/6)',
+    tipo: 'Saída',
+    categoria: 'Contas (Luz/Água/Internet)',
+    valor: 250,
+    status: 'Pendente',
+    vencimento: '2027-02-28',
+    recorrencia: 'Parcelada',
+    parcela: '5/6',
+    formaPagamento: 'PIX',
+    observacoes: 'Lançado para 6 meses',
+    criadoEm: '2026-10-30T16:09:49.463Z',
+  },
+  {
+    id: 'TX-75665-5',
+    data: '2027-02-28',
+    mesAno: '2027-02',
+    descricao: 'Aluguel (5/6)',
+    tipo: 'Saída',
+    categoria: 'Contas (Luz/Água/Internet)',
+    valor: 550,
+    status: 'Pendente',
+    vencimento: '2027-02-28',
+    recorrencia: 'Parcelada',
+    parcela: '5/6',
+    formaPagamento: 'PIX',
+    observacoes: 'Lançado para 6 meses',
+    criadoEm: '2026-10-30T16:09:35.665Z',
+  },
+  {
+    id: 'TX-32483-5',
+    data: '2027-02-28',
+    mesAno: '2027-02',
+    descricao: 'Emprestimo (5/6)',
+    tipo: 'Saída',
+    categoria: 'Outros',
+    valor: 377,
+    status: 'Pendente',
+    vencimento: '2027-02-28',
+    recorrencia: 'Parcelada',
+    parcela: '5/6',
+    formaPagamento: 'PIX',
+    observacoes: 'Lançado para 6 meses',
+    criadoEm: '2026-10-30T16:08:52.483Z',
+  },
+  {
+    id: 'TX-12174-3',
+    data: '2027-01-30',
+    mesAno: '2027-01',
+    descricao: 'Salário (3/6)',
+    tipo: 'Entrada',
+    categoria: 'Salário',
+    valor: 3750,
+    status: 'Pendente',
+    vencimento: '2027-01-30',
+    recorrencia: 'Parcelada',
+    parcela: '3/6',
+    formaPagamento: 'PIX',
+    observacoes: 'Lançado para 6 meses',
+    criadoEm: '2026-10-30T16:11:52.174Z',
+  },
+  {
+    id: 'TX-89463-4',
+    data: '2027-01-30',
+    mesAno: '2027-01',
+    descricao: 'Luz (4/6)',
+    tipo: 'Saída',
+    categoria: 'Contas (Luz/Água/Internet)',
+    valor: 250,
+    status: 'Pendente',
+    vencimento: '2027-01-30',
+    recorrencia: 'Parcelada',
+    parcela: '4/6',
+    formaPagamento: 'PIX',
+    observacoes: 'Lançado para 6 meses',
+    criadoEm: '2026-10-30T16:09:49.463Z',
+  },
+  {
+    id: 'TX-75665-4',
+    data: '2027-01-30',
+    mesAno: '2027-01',
+    descricao: 'Aluguel (4/6)',
+    tipo: 'Saída',
+    categoria: 'Contas (Luz/Água/Internet)',
+    valor: 550,
+    status: 'Pendente',
+    vencimento: '2027-01-30',
+    recorrencia: 'Parcelada',
+    parcela: '4/6',
+    formaPagamento: 'PIX',
+    observacoes: 'Lançado para 6 meses',
+    criadoEm: '2026-10-30T16:09:35.665Z',
+  },
+  {
+    id: 'TX-32483-4',
+    data: '2027-01-30',
+    mesAno: '2027-01',
+    descricao: 'Emprestimo (4/6)',
+    tipo: 'Saída',
+    categoria: 'Outros',
+    valor: 377,
+    status: 'Pendente',
+    vencimento: '2027-01-30',
+    recorrencia: 'Parcelada',
+    parcela: '4/6',
+    formaPagamento: 'PIX',
+    observacoes: 'Lançado para 6 meses',
+    criadoEm: '2026-10-30T16:08:52.483Z',
+  },
+  {
+    id: 'TX-12174-2',
+    data: '2026-12-30',
+    mesAno: '2026-12',
+    descricao: 'Salário (2/6)',
+    tipo: 'Entrada',
+    categoria: 'Salário',
+    valor: 3750,
+    status: 'Pendente',
+    vencimento: '2026-12-30',
+    recorrencia: 'Parcelada',
+    parcela: '2/6',
+    formaPagamento: 'PIX',
+    observacoes: 'Lançado para 6 meses',
+    criadoEm: '2026-10-30T16:11:52.174Z',
+  },
+  {
+    id: 'TX-89463-3',
+    data: '2026-12-30',
+    mesAno: '2026-12',
+    descricao: 'Luz (3/6)',
+    tipo: 'Saída',
+    categoria: 'Contas (Luz/Água/Internet)',
+    valor: 250,
+    status: 'Pendente',
+    vencimento: '2026-12-30',
+    recorrencia: 'Parcelada',
+    parcela: '3/6',
+    formaPagamento: 'PIX',
+    observacoes: 'Lançado para 6 meses',
+    criadoEm: '2026-10-30T16:09:49.463Z',
+  },
+  {
+    id: 'TX-75665-3',
+    data: '2026-12-30',
+    mesAno: '2026-12',
+    descricao: 'Aluguel (3/6)',
+    tipo: 'Saída',
+    categoria: 'Contas (Luz/Água/Internet)',
+    valor: 550,
+    status: 'Pendente',
+    vencimento: '2026-12-30',
+    recorrencia: 'Parcelada',
+    parcela: '3/6',
+    formaPagamento: 'PIX',
+    observacoes: 'Lançado para 6 meses',
+    criadoEm: '2026-10-30T16:09:35.665Z',
+  },
+  {
+    id: 'TX-32483-3',
+    data: '2026-12-30',
+    mesAno: '2026-12',
+    descricao: 'Emprestimo (3/6)',
+    tipo: 'Saída',
+    categoria: 'Outros',
+    valor: 377,
+    status: 'Pendente',
+    vencimento: '2026-12-30',
+    recorrencia: 'Parcelada',
+    parcela: '3/6',
+    formaPagamento: 'PIX',
+    observacoes: 'Lançado para 6 meses',
+    criadoEm: '2026-10-30T16:08:52.483Z',
+  },
+  {
+    id: 'TX-764289',
+    data: '2026-11-30',
+    mesAno: '2026-11',
+    descricao: 'Cartão Ingrid',
+    tipo: 'Saída',
+    categoria: 'Outros',
+    valor: 100,
+    status: 'Pendente',
+    vencimento: '2026-11-30',
+    recorrencia: 'Única',
+    parcela: '1/1',
+    formaPagamento: 'PIX',
+    observacoes: '',
+    criadoEm: '2026-10-30T16:12:44.289Z',
+  },
+  {
+    id: 'TX-12174-1',
+    data: '2026-11-30',
+    mesAno: '2026-11',
+    descricao: 'Salário (1/6)',
+    tipo: 'Entrada',
+    categoria: 'Salário',
+    valor: 3750,
+    status: 'Pendente',
+    vencimento: '2026-11-30',
+    recorrencia: 'Parcelada',
+    parcela: '1/6',
+    formaPagamento: 'PIX',
+    observacoes: 'Lançado para 6 meses',
+    criadoEm: '2026-10-30T16:11:52.174Z',
+  },
+  {
+    id: 'TX-75665-2',
+    data: '2026-11-30',
+    mesAno: '2026-11',
+    descricao: 'Aluguel (2/6)',
+    tipo: 'Saída',
+    categoria: 'Contas (Luz/Água/Internet)',
+    valor: 550,
+    status: 'Pendente',
+    vencimento: '2026-11-30',
+    recorrencia: 'Parcelada',
+    parcela: '2/6',
+    formaPagamento: 'PIX',
+    observacoes: 'Lançado para 6 meses',
+    criadoEm: '2026-10-30T16:09:35.665Z',
+  },
+  {
+    id: 'TX-32483-2',
+    data: '2026-11-30',
+    mesAno: '2026-11',
+    descricao: 'Emprestimo (2/6)',
+    tipo: 'Saída',
+    categoria: 'Outros',
+    valor: 377,
+    status: 'Pendente',
+    vencimento: '2026-11-30',
+    recorrencia: 'Parcelada',
+    parcela: '2/6',
+    formaPagamento: 'PIX',
+    observacoes: 'Lançado para 6 meses',
+    criadoEm: '2026-10-30T16:08:52.483Z',
+  },
+  {
+    id: 'TX-89463-1',
+    data: '2026-10-30',
+    mesAno: '2026-10',
+    descricao: 'Luz (1/6)',
+    tipo: 'Saída',
+    categoria: 'Contas (Luz/Água/Internet)',
+    valor: 250,
+    status: 'Pago',
+    vencimento: '2026-10-30',
+    recorrencia: 'Parcelada',
+    parcela: '1/6',
+    formaPagamento: 'PIX',
+    observacoes: 'Lançado para 6 meses',
+    criadoEm: '2026-10-30T16:09:49.463Z',
+  },
+  {
+    id: 'TX-75665-1',
+    data: '2026-10-30',
+    mesAno: '2026-10',
+    descricao: 'Aluguel (1/6)',
+    tipo: 'Saída',
+    categoria: 'Contas (Luz/Água/Internet)',
+    valor: 550,
+    status: 'Pago',
+    vencimento: '2026-10-30',
+    recorrencia: 'Parcelada',
+    parcela: '1/6',
+    formaPagamento: 'PIX',
+    observacoes: 'Lançado para 6 meses',
+    criadoEm: '2026-10-30T16:09:35.665Z',
+  },
+  {
+    id: 'TX-32483-1',
+    data: '2026-10-30',
+    mesAno: '2026-10',
+    descricao: 'Emprestimo (1/6)',
+    tipo: 'Saída',
+    categoria: 'Outros',
+    valor: 377,
+    status: 'Pago',
+    vencimento: '2026-10-30',
+    recorrencia: 'Parcelada',
+    parcela: '1/6',
+    formaPagamento: 'PIX',
+    observacoes: 'Lançado para 6 meses',
+    criadoEm: '2026-10-30T16:08:52.483Z',
+  },
+  {
+    id: 'TX-509955',
+    data: '2026-10-30',
+    mesAno: '2026-10',
+    descricao: 'Salário',
+    tipo: 'Entrada',
+    categoria: 'Salário',
+    valor: 3570,
+    status: 'Pago',
+    vencimento: '2026-10-30',
+    recorrencia: 'Única',
+    parcela: '1/1',
+    formaPagamento: 'PIX',
+    observacoes: '',
+    criadoEm: '2026-10-30T16:08:29.955Z',
+  },
+  {
+    id: 'TX-010238',
+    data: '2026-10-28',
+    mesAno: '2026-10',
+    descricao: 'Nubank',
+    tipo: 'Saída',
+    categoria: 'Cartão / Parcelas',
+    valor: 470,
+    status: 'Pendente',
+    vencimento: '2026-10-28',
+    recorrencia: 'Única',
+    parcela: '1/1',
+    formaPagamento: 'PIX',
+    observacoes: '',
+    criadoEm: '2026-10-30T16:16:50.238Z',
+  },
+  {
+    id: 'TX-985048',
+    data: '2026-10-28',
+    mesAno: '2026-10',
+    descricao: 'Cartão Picpay',
+    tipo: 'Saída',
+    categoria: 'Contas (Luz/Água/Internet)',
+    valor: 1262.73,
+    status: 'Pago',
+    vencimento: '2026-10-28',
+    recorrencia: 'Única',
+    parcela: '1/1',
+    formaPagamento: 'PIX',
+    observacoes: '',
+    criadoEm: '2026-10-30T16:16:25.048Z',
+  },
+  {
+    id: 'TX-961975',
+    data: '2026-10-28',
+    mesAno: '2026-10',
+    descricao: 'Cartão Ingrid',
+    tipo: 'Saída',
+    categoria: 'Outros',
+    valor: 700,
+    status: 'Pago',
+    vencimento: '2026-10-28',
+    recorrencia: 'Única',
+    parcela: '1/1',
+    formaPagamento: 'PIX',
+    observacoes: '',
+    criadoEm: '2026-10-30T16:16:01.975Z',
+  },
+];
 
 export const APPS_SCRIPT_SNIPPET = `const SPREADSHEET_ID = '${DEFAULT_SPREADSHEET_ID}';
-const SHEET_LANCAMENTOS = 'Lancamentos';
-const SHEET_CATEGORIAS = 'Categorias';
+const SHEET_LANCAMENTOS = 'Página2';
 
 function getSpreadsheet() {
   try {
@@ -34,37 +503,24 @@ function getSpreadsheet() {
 
 function doGet() {
   const ss = getSpreadsheet();
-  const transactions = readSheetAsObjects(ss.getSheetByName(SHEET_LANCAMENTOS));
-  const categories = readSheetAsObjects(ss.getSheetByName(SHEET_CATEGORIAS));
-  return jsonResponse({ ok: true, transactions, categories, updatedAt: new Date().toISOString() });
+  const sheet = ss.getSheetByName(SHEET_LANCAMENTOS) || ss.getSheets()[0];
+  const transactions = readSheetAsObjects(sheet);
+  return jsonResponse({ ok: true, transactions, updatedAt: new Date().toISOString() });
 }
 
 function doPost(e) {
   try {
     const payload = JSON.parse(e.postData.contents);
     const ss = getSpreadsheet();
-    const sheet = ss.getSheetByName(SHEET_LANCAMENTOS);
-    if (payload.action === 'add') {
-      sheet.appendRow(transactionToRow(payload.transaction));
-      return jsonResponse({ ok: true });
-    }
-    if (payload.action === 'update') {
-      const updated = updateRowById(sheet, payload.transaction.id, transactionToRow(payload.transaction));
-      if (!updated) sheet.appendRow(transactionToRow(payload.transaction));
-      return jsonResponse({ ok: true });
-    }
-    if (payload.action === 'delete') {
-      deleteRowById(sheet, payload.id);
-      return jsonResponse({ ok: true });
-    }
+    const sheet = ss.getSheetByName(SHEET_LANCAMENTOS) || ss.getSheets()[0];
     if (payload.action === 'syncAll') {
-      const headers = ['ID','Data','MesAno','Descricao','Tipo','Categoria','Valor','Status','Vencimento','Recorrencia','Parcela','FormaPagamento','Observacoes','CriadoEm'];
+      const headers = ['ID','Data','MesAno','Descricao','Tipo','Categoria','Valor','Status','Vencimento','Recorrencia','Parcela','FormaPagamento','Banco','Observacoes','CriadoEm'];
       sheet.clearContents();
       const rows = [headers, ...(payload.transactions || []).map(transactionToRow)];
       sheet.getRange(1, 1, rows.length, headers.length).setValues(rows);
       return jsonResponse({ ok: true, count: rows.length - 1 });
     }
-    return jsonResponse({ ok: false, error: 'Ação inválida' });
+    return jsonResponse({ ok: true });
   } catch (err) {
     return jsonResponse({ ok: false, error: String(err) });
   }
@@ -75,7 +531,7 @@ function transactionToRow(tx) {
     tx.id || '', tx.data || '', tx.mesAno || '', tx.descricao || '',
     tx.tipo || 'Saída', tx.categoria || 'Outros', Number(tx.valor || 0),
     tx.status || 'Pago', tx.vencimento || tx.data || '', tx.recorrencia || 'Única',
-    tx.parcela || '1/1', tx.formaPagamento || 'PIX', tx.observacoes || '', tx.criadoEm || new Date().toISOString()
+    tx.parcela || '1/1', tx.formaPagamento || 'PIX', tx.banco || '', tx.observacoes || '', tx.criadoEm || new Date().toISOString()
   ];
 }
 
@@ -89,28 +545,6 @@ function readSheetAsObjects(sheet) {
     headers.forEach((h, i) => obj[h] = row[i]);
     return obj;
   });
-}
-
-function updateRowById(sheet, id, newRow) {
-  const values = sheet.getDataRange().getValues();
-  for (var i = 1; i < values.length; i++) {
-    if (String(values[i][0]) === String(id)) {
-      sheet.getRange(i + 1, 1, 1, newRow.length).setValues([newRow]);
-      return true;
-    }
-  }
-  return false;
-}
-
-function deleteRowById(sheet, id) {
-  const values = sheet.getDataRange().getValues();
-  for (var i = values.length - 1; i >= 1; i--) {
-    if (String(values[i][0]) === String(id)) {
-      sheet.deleteRow(i + 1);
-      return true;
-    }
-  }
-  return false;
 }
 
 function jsonResponse(obj) {

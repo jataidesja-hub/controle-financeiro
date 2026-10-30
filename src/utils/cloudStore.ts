@@ -1,4 +1,5 @@
-import { Transaction } from '@/types/finance';
+import { BankAccount, Transaction } from '@/types/finance';
+import { INITIAL_BANKS, INITIAL_TRANSACTIONS } from '@/data/initialData';
 import fs from 'fs';
 
 const CLOUD_OBJECT_URL =
@@ -7,19 +8,20 @@ const TMP_FILE_PATH = '/tmp/fincontrol-cloud-state.json';
 
 export interface CloudState {
   transactions: Transaction[];
+  banks: BankAccount[];
   deletedIds: string[];
   appsScriptUrl: string;
   updatedAt: string;
 }
 
 const defaultState: CloudState = {
-  transactions: [],
+  transactions: INITIAL_TRANSACTIONS,
+  banks: INITIAL_BANKS,
   deletedIds: [],
   appsScriptUrl: process.env.NEXT_PUBLIC_APPS_SCRIPT_URL || '',
   updatedAt: new Date().toISOString(),
 };
 
-// In-memory cache per warm serverless instance
 let memoryCache: CloudState | null = null;
 
 function readTmpFallback(): CloudState {
@@ -59,15 +61,22 @@ export async function getCloudState(): Promise<CloudState> {
       const remoteTx: Transaction[] = Array.isArray(data.transactions)
         ? data.transactions
         : [];
+      const remoteBanks: BankAccount[] = Array.isArray(data.banks)
+        ? data.banks
+        : [];
       const remoteDeleted: string[] = Array.isArray(data.deletedIds)
         ? data.deletedIds
         : [];
 
-      // Merge with warm memory/tmp cache so we never lose recent writes
       const local = readTmpFallback();
       const deletedSet = new Set([...remoteDeleted, ...local.deletedIds]);
       const mergedMap = new Map<string, Transaction>();
 
+      for (const t of INITIAL_TRANSACTIONS) {
+        if (t && t.id && !deletedSet.has(t.id)) {
+          mergedMap.set(t.id, t);
+        }
+      }
       for (const t of local.transactions) {
         if (t && t.id && !deletedSet.has(t.id)) {
           mergedMap.set(t.id, t);
@@ -79,10 +88,18 @@ export async function getCloudState(): Promise<CloudState> {
         }
       }
 
+      const banksToUse =
+        remoteBanks.length > 0
+          ? remoteBanks
+          : local.banks && local.banks.length > 0
+          ? local.banks
+          : INITIAL_BANKS;
+
       const state: CloudState = {
         transactions: Array.from(mergedMap.values()).sort((a, b) =>
           b.data.localeCompare(a.data)
         ),
+        banks: banksToUse,
         deletedIds: Array.from(deletedSet),
         appsScriptUrl: String(
           data.appsScriptUrl ||

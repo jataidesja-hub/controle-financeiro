@@ -1,6 +1,6 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { getCloudState, saveCloudState } from '@/utils/cloudStore';
-import { Transaction } from '@/types/finance';
+import { BankAccount, Transaction } from '@/types/finance';
 
 export async function GET(request: NextRequest) {
   const { searchParams } = new URL(request.url);
@@ -26,6 +26,7 @@ export async function GET(request: NextRequest) {
           ok: true,
           source: 'sheets',
           transactions: data.transactions,
+          banks: state.banks,
           deletedIds: state.deletedIds,
           appsScriptUrl: scriptUrl,
           updatedAt: new Date().toISOString(),
@@ -43,6 +44,7 @@ export async function GET(request: NextRequest) {
     ok: true,
     source: 'cloud',
     transactions: state.transactions,
+    banks: state.banks,
     deletedIds: state.deletedIds,
     appsScriptUrl: state.appsScriptUrl,
     updatedAt: state.updatedAt,
@@ -66,7 +68,10 @@ export async function POST(request: NextRequest) {
       state.appsScriptUrl = scriptUrl;
     }
 
-    // Always preserve clientTransactions if sent so a cold-start never drops items
+    if (Array.isArray(body.banks)) {
+      state.banks = body.banks as BankAccount[];
+    }
+
     if (Array.isArray(body.clientTransactions)) {
       const deletedSet = new Set(state.deletedIds);
       const map = new Map<string, Transaction>();
@@ -126,7 +131,6 @@ export async function POST(request: NextRequest) {
     state.transactions.sort((a, b) => b.data.localeCompare(a.data));
     const saved = await saveCloudState(state);
 
-    // Also forward to Google Sheets if Apps Script URL is configured
     let sheetSynced = false;
     if (scriptUrl) {
       try {
@@ -149,6 +153,7 @@ export async function POST(request: NextRequest) {
       ok: true,
       sheetSynced,
       transactions: saved.transactions,
+      banks: saved.banks,
       deletedIds: saved.deletedIds,
       appsScriptUrl: saved.appsScriptUrl,
       updatedAt: saved.updatedAt,
