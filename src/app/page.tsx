@@ -1,6 +1,6 @@
 'use client';
 
-import React, { useEffect, useMemo, useState } from 'react';
+import React, { useEffect, useMemo, useRef, useState } from 'react';
 import {
   ArrowDownCircle,
   ArrowUpCircle,
@@ -13,8 +13,10 @@ import {
   Download,
   ExternalLink,
   FileSpreadsheet,
+  FileUp,
   Plus,
   RefreshCw,
+  Smartphone,
   Trash2,
   Upload,
   Wallet,
@@ -33,6 +35,10 @@ import {
   TransactionStatus,
   TransactionType,
 } from '@/types/finance';
+import {
+  parseBankFile,
+  parseBankNotificationText,
+} from '@/utils/bankParsers';
 
 const STORAGE_KEYS = {
   TRANSACTIONS: 'fincontrol_real_transactions_v2',
@@ -84,7 +90,10 @@ function shiftMonth(mesAno: string, delta: number): string {
   return `${ny}-${nm}`;
 }
 
-function normalizeRemoteTransaction(raw: Record<string, unknown>, idx: number): Transaction {
+function normalizeRemoteTransaction(
+  raw: Record<string, unknown>,
+  idx: number
+): Transaction {
   const dataRaw = String(raw.Data || raw.data || getTodayISO()).slice(0, 10);
   const mesAnoRaw = String(raw.MesAno || raw.mesAno || dataRaw.slice(0, 7));
   const valorNum = Number(
@@ -98,16 +107,23 @@ function normalizeRemoteTransaction(raw: Record<string, unknown>, idx: number): 
     data: dataRaw,
     mesAno: mesAnoRaw,
     descricao: String(raw.Descricao || raw.descricao || ''),
-    tipo: (String(raw.Tipo || raw.tipo) === 'Entrada' ? 'Entrada' : 'Saída') as TransactionType,
+    tipo: (String(raw.Tipo || raw.tipo) === 'Entrada'
+      ? 'Entrada'
+      : 'Saída') as TransactionType,
     categoria: String(raw.Categoria || raw.categoria || 'Outros'),
     valor: Number.isFinite(valorNum) ? valorNum : 0,
     status: (String(raw.Status || raw.status) === 'Pendente'
       ? 'Pendente'
       : 'Pago') as TransactionStatus,
-    vencimento: String(raw.Vencimento || raw.vencimento || dataRaw).slice(0, 10),
+    vencimento: String(raw.Vencimento || raw.vencimento || dataRaw).slice(
+      0,
+      10
+    ),
     recorrencia: 'Única',
     parcela: '1/1',
-    formaPagamento: (String(raw.FormaPagamento || raw.formaPagamento || 'PIX') as PaymentMethod),
+    formaPagamento: String(
+      raw.FormaPagamento || raw.formaPagamento || 'PIX'
+    ) as PaymentMethod,
     observacoes: String(raw.Observacoes || raw.observacoes || ''),
     criadoEm: String(raw.CriadoEm || raw.criadoEm || new Date().toISOString()),
   };
@@ -115,9 +131,13 @@ function normalizeRemoteTransaction(raw: Record<string, unknown>, idx: number): 
 
 export default function FinanceiroSimplesApp() {
   const today = getTodayISO();
+  const fileInputRef = useRef<HTMLInputElement | null>(null);
+
   const [transactions, setTransactions] = useState<Transaction[]>([]);
   const [selectedMonth, setSelectedMonth] = useState<string>(today.slice(0, 7));
-  const [filterTipo, setFilterTipo] = useState<'TODOS' | 'Entrada' | 'Saída' | 'Pendente'>('TODOS');
+  const [filterTipo, setFilterTipo] = useState<
+    'TODOS' | 'Entrada' | 'Saída' | 'Pendente'
+  >('TODOS');
 
   // Form states (inline & direct)
   const [tipo, setTipo] = useState<TransactionType>('Saída');
@@ -127,7 +147,7 @@ export default function FinanceiroSimplesApp() {
   const [data, setData] = useState(today);
   const [status, setStatus] = useState<TransactionStatus>('Pago');
 
-  // Google Sheets Sync
+  // Google Sheets Sync & Bank Automation
   const [syncSettings, setSyncSettings] = useState<SyncSettings>({
     spreadsheetId: DEFAULT_SPREADSHEET_ID,
     spreadsheetUrl: DEFAULT_SPREADSHEET_URL,
@@ -136,14 +156,20 @@ export default function FinanceiroSimplesApp() {
     lastSyncAt: null,
   });
   const [isSyncModalOpen, setIsSyncModalOpen] = useState(false);
+  const [isBankModalOpen, setIsBankModalOpen] = useState(false);
   const [isSyncing, setIsSyncing] = useState(false);
   const [copiedScript, setCopiedScript] = useState(false);
+  const [copiedWebhook, setCopiedWebhook] = useState(false);
   const [syncMsg, setSyncMsg] = useState<string | null>(null);
+  const [bannerNotice, setBannerNotice] = useState<string | null>(null);
+
+  // Notification simulator / quick paste
+  const [notifBanco, setNotifBanco] = useState<'Nubank' | 'PicPay'>('Nubank');
+  const [notifTexto, setNotifTexto] = useState('');
 
   // Load saved real data from localStorage
   useEffect(() => {
     try {
-      // Clear legacy example key if present
       localStorage.removeItem('fincontrol_transactions_v1');
 
       const saved = localStorage.getItem(STORAGE_KEYS.TRANSACTIONS);
@@ -162,7 +188,10 @@ export default function FinanceiroSimplesApp() {
 
   useEffect(() => {
     try {
-      localStorage.setItem(STORAGE_KEYS.TRANSACTIONS, JSON.stringify(transactions));
+      localStorage.setItem(
+        STORAGE_KEYS.TRANSACTIONS,
+        JSON.stringify(transactions)
+      );
     } catch (e) {
       console.error(e);
     }
@@ -190,7 +219,10 @@ export default function FinanceiroSimplesApp() {
       });
       const json = await res.json();
       if (json.ok) {
-        setSyncSettings((prev) => ({ ...prev, lastSyncAt: new Date().toISOString() }));
+        setSyncSettings((prev) => ({
+          ...prev,
+          lastSyncAt: new Date().toISOString(),
+        }));
         return true;
       }
       return false;
@@ -210,15 +242,21 @@ export default function FinanceiroSimplesApp() {
       setIsSyncing(true);
       setSyncMsg('Carregando da planilha...');
       const res = await fetch(
-        `/api/sheets?scriptUrl=${encodeURIComponent(syncSettings.appsScriptUrl)}`
+        `/api/sheets?scriptUrl=${encodeURIComponent(
+          syncSettings.appsScriptUrl
+        )}`
       );
       const json = await res.json();
       if (json.ok && Array.isArray(json.transactions)) {
-        const list = json.transactions.map((item: Record<string, unknown>, idx: number) =>
-          normalizeRemoteTransaction(item, idx)
+        const list = json.transactions.map(
+          (item: Record<string, unknown>, idx: number) =>
+            normalizeRemoteTransaction(item, idx)
         );
         setTransactions(list);
-        setSyncSettings((prev) => ({ ...prev, lastSyncAt: new Date().toISOString() }));
+        setSyncSettings((prev) => ({
+          ...prev,
+          lastSyncAt: new Date().toISOString(),
+        }));
         setSyncMsg(`Pronto! ${list.length} lançamentos carregados.`);
       } else {
         setSyncMsg(json.error || 'Erro ao ler planilha.');
@@ -230,10 +268,98 @@ export default function FinanceiroSimplesApp() {
     }
   }
 
+  // Option 1: Import CSV / OFX from Nubank or PicPay
+  async function handleFileUpload(e: React.ChangeEvent<HTMLInputElement>) {
+    const file = e.target.files?.[0];
+    if (!file) return;
+
+    const text = await file.text();
+    const imported = parseBankFile(text, file.name);
+    e.target.value = '';
+
+    if (imported.length === 0) {
+      setBannerNotice(
+        'Não foi possível encontrar lançamentos válidos neste arquivo CSV/OFX.'
+      );
+      return;
+    }
+
+    const existingIds = new Set(transactions.map((t) => t.id));
+    const uniqueNew = imported.filter((t) => !existingIds.has(t.id));
+
+    setTransactions((prev) => [...uniqueNew, ...prev]);
+    if (uniqueNew[0]?.mesAno) {
+      setSelectedMonth(uniqueNew[0].mesAno);
+    }
+    setBannerNotice(
+      `${uniqueNew.length} lançamentos importados do extrato (${file.name})!`
+    );
+    setTimeout(() => setBannerNotice(null), 5000);
+
+    if (syncSettings.appsScriptUrl && uniqueNew.length > 0) {
+      await pushToSheets({
+        action: 'syncAll',
+        transactions: [...uniqueNew, ...transactions],
+      });
+    }
+  }
+
+  // Option 3: Parse bank notification text directly or pull from webhook buffer
+  async function handleProcessNotificationText(e: React.FormEvent) {
+    e.preventDefault();
+    const tx = parseBankNotificationText(notifTexto, notifBanco);
+    if (!tx) {
+      setBannerNotice(
+        'Digite ou cole um texto que contenha um valor em R$ (ex: Compra de R$ 35,90 aprovada em Padaria).'
+      );
+      return;
+    }
+    setTransactions((prev) => [tx, ...prev]);
+    setSelectedMonth(tx.mesAno);
+    setNotifTexto('');
+    setIsBankModalOpen(false);
+    setBannerNotice(
+      `Lançamento automático criado: ${tx.descricao} (${formatCurrency(
+        tx.valor
+      )})`
+    );
+    setTimeout(() => setBannerNotice(null), 5000);
+
+    if (syncSettings.appsScriptUrl) {
+      await pushToSheets({ action: 'add', transaction: tx });
+    }
+  }
+
+  async function pullRecentWebhookNotifications() {
+    try {
+      const res = await fetch('/api/webhook-banco');
+      const json = await res.json();
+      if (json.ok && Array.isArray(json.recent) && json.recent.length > 0) {
+        const existingIds = new Set(transactions.map((t) => t.id));
+        const newOnes = (json.recent as Transaction[]).filter(
+          (t) => !existingIds.has(t.id)
+        );
+        if (newOnes.length > 0) {
+          setTransactions((prev) => [...newOnes, ...prev]);
+          setBannerNotice(
+            `${newOnes.length} nova(s) notificação(ões) do celular recebida(s)!`
+          );
+          setTimeout(() => setBannerNotice(null), 4000);
+        } else {
+          setBannerNotice('Nenhuma nova notificação pendente no momento.');
+          setTimeout(() => setBannerNotice(null), 3000);
+        }
+      }
+    } catch {
+      // ignore
+    }
+  }
+
   async function handleAddTransaction(e: React.FormEvent) {
     e.preventDefault();
     const numericVal = parseFloat(valor.replace(',', '.'));
-    if (!descricao.trim() || Number.isNaN(numericVal) || numericVal <= 0) return;
+    if (!descricao.trim() || Number.isNaN(numericVal) || numericVal <= 0)
+      return;
 
     const newTx: Transaction = {
       id: `TX-${Date.now().toString().slice(-6)}`,
@@ -267,7 +393,9 @@ export default function FinanceiroSimplesApp() {
       ...tx,
       status: tx.status === 'Pago' ? 'Pendente' : 'Pago',
     };
-    setTransactions((prev) => prev.map((t) => (t.id === tx.id ? updated : t)));
+    setTransactions((prev) =>
+      prev.map((t) => (t.id === tx.id ? updated : t))
+    );
     if (syncSettings.appsScriptUrl) {
       await pushToSheets({ action: 'update', transaction: updated });
     }
@@ -311,11 +439,33 @@ export default function FinanceiroSimplesApp() {
   }, [monthTransactions]);
 
   const categoriesForType = useMemo(() => {
-    return INITIAL_CATEGORIES.filter((c) => c.tipo === tipo).map((c) => c.categoria);
+    return INITIAL_CATEGORIES.filter((c) => c.tipo === tipo).map(
+      (c) => c.categoria
+    );
   }, [tipo]);
+
+  const webhookEndpointUrl = useMemo(() => {
+    const origin =
+      typeof window !== 'undefined'
+        ? window.location.origin
+        : 'https://controle-financeiro-nine-pi.vercel.app';
+    const scriptParam = syncSettings.appsScriptUrl
+      ? `&scriptUrl=${encodeURIComponent(syncSettings.appsScriptUrl)}`
+      : '';
+    return `${origin}/api/webhook-banco?banco=Nubank&texto={notificacao}${scriptParam}`;
+  }, [syncSettings.appsScriptUrl]);
 
   return (
     <div className="min-h-screen bg-slate-950 text-slate-100">
+      {/* Hidden input for CSV / OFX import */}
+      <input
+        ref={fileInputRef}
+        type="file"
+        accept=".csv,.ofx"
+        onChange={handleFileUpload}
+        className="hidden"
+      />
+
       {/* Header simples */}
       <header className="border-b border-slate-800 bg-slate-900/80">
         <div className="max-w-4xl mx-auto px-4 py-3.5 flex flex-wrap items-center justify-between gap-3">
@@ -333,7 +483,9 @@ export default function FinanceiroSimplesApp() {
             <button
               type="button"
               onClick={() =>
-                setSelectedMonth((p) => (p === 'ALL' ? today.slice(0, 7) : shiftMonth(p, -1)))
+                setSelectedMonth((p) =>
+                  p === 'ALL' ? today.slice(0, 7) : shiftMonth(p, -1)
+                )
               }
               className="p-1.5 rounded-lg hover:bg-slate-800 text-slate-400 hover:text-white cursor-pointer"
             >
@@ -346,7 +498,9 @@ export default function FinanceiroSimplesApp() {
             <button
               type="button"
               onClick={() =>
-                setSelectedMonth((p) => (p === 'ALL' ? today.slice(0, 7) : shiftMonth(p, 1)))
+                setSelectedMonth((p) =>
+                  p === 'ALL' ? today.slice(0, 7) : shiftMonth(p, 1)
+                )
               }
               className="p-1.5 rounded-lg hover:bg-slate-800 text-slate-400 hover:text-white cursor-pointer"
             >
@@ -355,7 +509,9 @@ export default function FinanceiroSimplesApp() {
             <button
               type="button"
               onClick={() =>
-                setSelectedMonth((p) => (p === 'ALL' ? today.slice(0, 7) : 'ALL'))
+                setSelectedMonth((p) =>
+                  p === 'ALL' ? today.slice(0, 7) : 'ALL'
+                )
               }
               className={`px-2 py-1 rounded-lg text-xs font-medium cursor-pointer ${
                 selectedMonth === 'ALL'
@@ -367,8 +523,28 @@ export default function FinanceiroSimplesApp() {
             </button>
           </div>
 
-          {/* Botões Planilha */}
-          <div className="flex items-center gap-2">
+          {/* Ações rápidas: Nubank/PicPay + Planilha */}
+          <div className="flex flex-wrap items-center gap-2">
+            <button
+              type="button"
+              onClick={() => fileInputRef.current?.click()}
+              className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-xl text-xs font-semibold bg-purple-500/20 hover:bg-purple-500/30 text-purple-300 border border-purple-500/30 transition cursor-pointer"
+              title="Importar extrato CSV ou OFX do Nubank ou PicPay"
+            >
+              <FileUp className="w-3.5 h-3.5" />
+              <span>Importar CSV/OFX</span>
+            </button>
+
+            <button
+              type="button"
+              onClick={() => setIsBankModalOpen(true)}
+              className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-xl text-xs font-semibold bg-emerald-500/20 hover:bg-emerald-500/30 text-emerald-300 border border-emerald-500/30 transition cursor-pointer"
+              title="Automação Nubank / PicPay pelo Celular"
+            >
+              <Smartphone className="w-3.5 h-3.5" />
+              <span>Nubank / PicPay</span>
+            </button>
+
             <a
               href={syncSettings.spreadsheetUrl}
               target="_blank"
@@ -379,12 +555,17 @@ export default function FinanceiroSimplesApp() {
               <span>Planilha</span>
               <ExternalLink className="w-3 h-3 text-slate-400" />
             </a>
+
             <button
               type="button"
               onClick={() => setIsSyncModalOpen(true)}
               className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-xl text-xs font-medium bg-slate-800 hover:bg-slate-700 text-slate-200 transition cursor-pointer"
             >
-              <RefreshCw className={`w-3.5 h-3.5 text-emerald-400 ${isSyncing ? 'animate-spin' : ''}`} />
+              <RefreshCw
+                className={`w-3.5 h-3.5 text-emerald-400 ${
+                  isSyncing ? 'animate-spin' : ''
+                }`}
+              />
               <span>Sincronizar</span>
             </button>
           </div>
@@ -392,6 +573,19 @@ export default function FinanceiroSimplesApp() {
       </header>
 
       <main className="max-w-4xl mx-auto px-4 py-6 space-y-6">
+        {bannerNotice && (
+          <div className="p-3.5 rounded-xl bg-emerald-500/15 border border-emerald-500/30 text-xs sm:text-sm text-emerald-300 flex items-center justify-between">
+            <span>{bannerNotice}</span>
+            <button
+              type="button"
+              onClick={() => setBannerNotice(null)}
+              className="text-emerald-400 hover:text-white"
+            >
+              <X className="w-4 h-4" />
+            </button>
+          </div>
+        )}
+
         {/* 3 Cards Diretos: Entradas, Saídas e Saldo */}
         <section className="grid grid-cols-1 sm:grid-cols-3 gap-3.5">
           <div className="rounded-2xl bg-slate-900 border border-slate-800 p-4">
@@ -472,21 +666,27 @@ export default function FinanceiroSimplesApp() {
 
             <div className="grid grid-cols-1 sm:grid-cols-12 gap-3">
               <div className="sm:col-span-4">
-                <label className="block text-xs text-slate-400 mb-1">Descrição</label>
+                <label className="block text-xs text-slate-400 mb-1">
+                  Descrição
+                </label>
                 <input
                   type="text"
                   required
                   value={descricao}
                   onChange={(e) => setDescricao(e.target.value)}
                   placeholder={
-                    tipo === 'Entrada' ? 'Ex: Salário, Venda...' : 'Ex: Mercado, Luz, Aluguel...'
+                    tipo === 'Entrada'
+                      ? 'Ex: Salário, PIX recebido...'
+                      : 'Ex: Mercado, Luz, Aluguel...'
                   }
                   className="w-full px-3 py-2 bg-slate-950 border border-slate-800 rounded-xl text-sm text-white focus:outline-none focus:border-emerald-500"
                 />
               </div>
 
               <div className="sm:col-span-2">
-                <label className="block text-xs text-slate-400 mb-1">Valor (R$)</label>
+                <label className="block text-xs text-slate-400 mb-1">
+                  Valor (R$)
+                </label>
                 <input
                   type="number"
                   step="0.01"
@@ -499,7 +699,9 @@ export default function FinanceiroSimplesApp() {
               </div>
 
               <div className="sm:col-span-3">
-                <label className="block text-xs text-slate-400 mb-1">Categoria</label>
+                <label className="block text-xs text-slate-400 mb-1">
+                  Categoria
+                </label>
                 <select
                   value={categoria}
                   onChange={(e) => setCategoria(e.target.value)}
@@ -600,7 +802,8 @@ export default function FinanceiroSimplesApp() {
 
           {filteredList.length === 0 ? (
             <div className="py-12 text-center text-slate-400 text-sm border border-dashed border-slate-800 rounded-xl">
-              Nenhum lançamento cadastrado neste período. Use o formulário acima para adicionar seus dados reais.
+              Nenhum lançamento neste período. Adicione manualmente acima ou clique em{' '}
+              <strong className="text-slate-200">Importar CSV/OFX</strong> para subir seu extrato do Nubank / PicPay.
             </div>
           ) : (
             <div className="divide-y divide-slate-800/80">
@@ -654,10 +857,13 @@ export default function FinanceiroSimplesApp() {
 
                     <span
                       className={`text-sm font-bold min-w-[95px] text-right ${
-                        tx.tipo === 'Entrada' ? 'text-emerald-400' : 'text-rose-400'
+                        tx.tipo === 'Entrada'
+                          ? 'text-emerald-400'
+                          : 'text-rose-400'
                       }`}
                     >
-                      {tx.tipo === 'Entrada' ? '+' : '-'} {formatCurrency(tx.valor)}
+                      {tx.tipo === 'Entrada' ? '+' : '-'}{' '}
+                      {formatCurrency(tx.valor)}
                     </span>
 
                     <button
@@ -675,6 +881,128 @@ export default function FinanceiroSimplesApp() {
           )}
         </section>
       </main>
+
+      {/* MODAL: AUTOMAÇÃO NUBANK & PICPAY (OPÇÃO 1 + OPÇÃO 3) */}
+      {isBankModalOpen && (
+        <div className="fixed inset-0 z-50 bg-black/75 flex items-center justify-center p-4 overflow-y-auto">
+          <div className="bg-slate-900 border border-slate-800 rounded-2xl max-w-xl w-full p-5 space-y-5 max-h-[90vh] overflow-y-auto">
+            <div className="flex items-center justify-between">
+              <div className="flex items-center gap-2">
+                <Smartphone className="w-5 h-5 text-emerald-400" />
+                <h3 className="font-bold text-white text-base">
+                  Integração Gratuita • Nubank & PicPay
+                </h3>
+              </div>
+              <button
+                type="button"
+                onClick={() => setIsBankModalOpen(false)}
+                className="p-1 text-slate-400 hover:text-white"
+              >
+                <X className="w-5 h-5" />
+              </button>
+            </div>
+
+            {/* Opção 1: Importar Arquivo CSV/OFX */}
+            <div className="p-4 rounded-xl bg-slate-950 border border-slate-800 space-y-2.5">
+              <div className="flex items-center justify-between">
+                <span className="text-xs font-bold uppercase tracking-wider text-purple-300">
+                  1. Importar Extrato ou Fatura (CSV / OFX)
+                </span>
+                <button
+                  type="button"
+                  onClick={() => {
+                    setIsBankModalOpen(false);
+                    fileInputRef.current?.click();
+                  }}
+                  className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs font-bold bg-purple-500 hover:bg-purple-400 text-slate-950 cursor-pointer"
+                >
+                  <FileUp className="w-3.5 h-3.5" /> Escolher Arquivo CSV / OFX
+                </button>
+              </div>
+              <p className="text-xs text-slate-400">
+                No app do <strong>Nubank</strong> ou <strong>PicPay</strong>, exporte o extrato do mês em CSV ou OFX e selecione acima. O sistema separa Entradas e Saídas automaticamente.
+              </p>
+            </div>
+
+            {/* Lançador Rápido por Texto de Notificação / Comprovante */}
+            <form
+              onSubmit={handleProcessNotificationText}
+              className="p-4 rounded-xl bg-slate-950 border border-slate-800 space-y-3"
+            >
+              <div className="flex items-center justify-between">
+                <span className="text-xs font-bold uppercase tracking-wider text-emerald-300">
+                  2. Colar Notificação do Banco / Testar Leitura
+                </span>
+                <div className="flex gap-1">
+                  {(['Nubank', 'PicPay'] as const).map((b) => (
+                    <button
+                      key={b}
+                      type="button"
+                      onClick={() => setNotifBanco(b)}
+                      className={`px-2 py-0.5 rounded text-xs font-semibold cursor-pointer ${
+                        notifBanco === b
+                          ? 'bg-emerald-500 text-slate-950'
+                          : 'bg-slate-800 text-slate-400'
+                      }`}
+                    >
+                      {b}
+                    </button>
+                  ))}
+                </div>
+              </div>
+              <input
+                type="text"
+                value={notifTexto}
+                onChange={(e) => setNotifTexto(e.target.value)}
+                placeholder="Ex: Compra de R$ 48,90 aprovada em SUPERMERCADO ou Pix recebido de R$ 250,00"
+                className="w-full px-3 py-2 bg-slate-900 border border-slate-700 rounded-xl text-xs text-white"
+              />
+              <div className="flex items-center justify-between gap-2">
+                <button
+                  type="button"
+                  onClick={pullRecentWebhookNotifications}
+                  className="px-3 py-1.5 rounded-lg text-xs font-medium bg-slate-800 hover:bg-slate-700 text-slate-200 cursor-pointer"
+                >
+                  Buscar Notificações do Celular
+                </button>
+                <button
+                  type="submit"
+                  className="px-4 py-1.5 rounded-lg text-xs font-bold bg-emerald-500 hover:bg-emerald-400 text-slate-950 cursor-pointer"
+                >
+                  Lançar Automaticamente
+                </button>
+              </div>
+            </form>
+
+            {/* Opção 3: Webhook Automático no Celular */}
+            <div className="p-4 rounded-xl bg-slate-950 border border-slate-800 space-y-2.5">
+              <div className="flex items-center justify-between">
+                <span className="text-xs font-bold uppercase tracking-wider text-sky-300">
+                  3. Automação no Celular (MacroDroid / Atalhos iOS)
+                </span>
+                <button
+                  type="button"
+                  onClick={() => {
+                    navigator.clipboard.writeText(webhookEndpointUrl);
+                    setCopiedWebhook(true);
+                    setTimeout(() => setCopiedWebhook(false), 2000);
+                  }}
+                  className="inline-flex items-center gap-1 px-2.5 py-1 rounded-lg text-xs font-semibold bg-sky-500/20 text-sky-300 cursor-pointer"
+                >
+                  <Copy className="w-3 h-3" />
+                  {copiedWebhook ? 'Link Copiado!' : 'Copiar URL do Webhook'}
+                </button>
+              </div>
+              <p className="text-xs text-slate-400">
+                No app gratuito <strong>MacroDroid</strong> (Android) ou <strong>Atalhos</strong> (iPhone), crie um gatilho quando chegar notificação do <strong>Nubank</strong> ou <strong>PicPay</strong> para chamar esta URL (substituindo <code>{'{notificacao}'}</code> pelo texto da notificação):
+              </p>
+              <code className="block p-2 rounded bg-slate-900 text-[11px] text-slate-300 break-all border border-slate-800">
+                {webhookEndpointUrl}
+              </code>
+            </div>
+          </div>
+        </div>
+      )}
 
       {/* Modal Simples de Sincronização com a Planilha */}
       {isSyncModalOpen && (
@@ -729,8 +1057,15 @@ export default function FinanceiroSimplesApp() {
                 type="button"
                 onClick={async () => {
                   setSyncMsg('Enviando para a planilha...');
-                  const ok = await pushToSheets({ action: 'syncAll', transactions });
-                  setSyncMsg(ok ? 'Planilha atualizada com sucesso!' : 'Configure a URL acima primeiro.');
+                  const ok = await pushToSheets({
+                    action: 'syncAll',
+                    transactions,
+                  });
+                  setSyncMsg(
+                    ok
+                      ? 'Planilha atualizada com sucesso!'
+                      : 'Configure a URL acima primeiro.'
+                  );
                 }}
                 className="inline-flex items-center gap-1.5 px-3.5 py-2 rounded-xl text-xs font-bold bg-slate-800 text-slate-200 cursor-pointer"
               >
@@ -746,7 +1081,9 @@ export default function FinanceiroSimplesApp() {
                 className="inline-flex items-center gap-1.5 px-3 py-2 rounded-xl text-xs font-medium bg-slate-800 text-emerald-300 cursor-pointer"
               >
                 <Copy className="w-3.5 h-3.5" />
-                {copiedScript ? 'Script Copiado!' : 'Copiar Script da Planilha'}
+                {copiedScript
+                  ? 'Script Copiado!'
+                  : 'Copiar Script da Planilha'}
               </button>
             </div>
           </div>
