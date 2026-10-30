@@ -289,6 +289,13 @@ export function normalizeBankName(rawBank: string, rawText: string = ''): string
   return rawBank.trim() || 'Nubank';
 }
 
+function shiftYearMonth(ym: string, deltaMonths: number): string {
+  const [y, m] = ym.split('-').map(Number);
+  if (!y || !m) return ym;
+  const d = new Date(y, m - 1 + deltaMonths, 1);
+  return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}`;
+}
+
 export function parseBankNotificationText(
   texto: string,
   banco: string = 'Nubank'
@@ -319,6 +326,30 @@ export function parseBankNotificationText(
 
   const tipo: TransactionType = isEntrada ? 'Entrada' : 'Saída';
 
+  // Detect if it is a Credit Card purchase (which goes to next month's bill as Pendente)
+  // In PicPay / Nubank / Caixa, "Compra de R$ ... APROVADA" or "cashback" or "crédito" or "fatura"
+  // without "débito" or "pix" is a credit card purchase.
+  const isExplicitDebitOrPix =
+    lower.includes('débito') ||
+    lower.includes('debito') ||
+    lower.includes('pix') ||
+    lower.includes('transferência') ||
+    lower.includes('transferencia') ||
+    lower.includes('boleto');
+
+  const isCreditCardPurchase =
+    !isEntrada &&
+    !isExplicitDebitOrPix &&
+    (lower.includes('crédito') ||
+      lower.includes('credito') ||
+      lower.includes('fatura') ||
+      lower.includes('cashback') ||
+      lower.includes('cartão') ||
+      lower.includes('cartao') ||
+      lower.includes('aprovada') ||
+      lower.includes('aprovado') ||
+      lower.includes('compra de r$'));
+
   // Extract merchant / counterparty if possible
   let descricao = clean;
   const emMatch = clean.match(/\bem\s+([A-Za-zÀ-ÿ0-9\s*._-]+?)(?:\s+no\s+valor|\s+aprovad|\.|$)/i);
@@ -326,32 +357,47 @@ export function parseBankNotificationText(
   const paraMatch = clean.match(/\bpara\s+([A-Za-zÀ-ÿ0-9\s*._-]+?)(?:\s+no\s+valor|\.|$)/i);
 
   if (!isEntrada && emMatch && emMatch[1].trim().length > 2) {
-    descricao = `${emMatch[1].trim()} (${bankName})`;
+    descricao = isCreditCardPurchase
+      ? `💳 ${emMatch[1].trim()} (${bankName} Crédito)`
+      : `${emMatch[1].trim()} (${bankName})`;
   } else if (isEntrada && deMatch && deMatch[1].trim().length > 2 && !deMatch[1].includes('R$')) {
     descricao = `Recebido de ${deMatch[1].trim()} (${bankName})`;
   } else if (!isEntrada && paraMatch && paraMatch[1].trim().length > 2 && !paraMatch[1].includes('R$')) {
     descricao = `Enviado para ${paraMatch[1].trim()} (${bankName})`;
   } else {
-    descricao = `${clean.slice(0, 55)} (${bankName})`;
+    descricao = isCreditCardPurchase
+      ? `💳 ${clean.slice(0, 50)} (${bankName} Crédito)`
+      : `${clean.slice(0, 55)} (${bankName})`;
   }
 
   const today = new Date().toISOString().slice(0, 10);
-  const formaPagamento: PaymentMethod = lower.includes('crédito')
+  const currentMonth = today.slice(0, 7);
+  // Credit card purchases go to NEXT month's bill and stay 'Pendente' so they don't deduct from checking account now
+  const targetMonth = isCreditCardPurchase
+    ? shiftYearMonth(currentMonth, 1)
+    : currentMonth;
+  const targetVencimento = isCreditCardPurchase
+    ? `${targetMonth}-${today.slice(8, 10)}`
+    : today;
+
+  const formaPagamento: PaymentMethod = isCreditCardPurchase
     ? 'Cartão de Crédito'
-    : lower.includes('débito')
+    : lower.includes('débito') || lower.includes('debito')
     ? 'Débito'
     : 'PIX';
 
   return {
     id: `AUTO-${Date.now().toString().slice(-6)}`,
     data: today,
-    mesAno: today.slice(0, 7),
+    mesAno: targetMonth,
     descricao,
     tipo,
-    categoria: autoCategorize(clean, tipo),
+    categoria: isCreditCardPurchase
+      ? 'Cartão / Parcelas'
+      : autoCategorize(clean, tipo),
     valor,
-    status: 'Pago',
-    vencimento: today,
+    status: isCreditCardPurchase ? 'Pendente' : 'Pago',
+    vencimento: targetVencimento,
     recorrencia: 'Única',
     parcela: '1/1',
     formaPagamento,

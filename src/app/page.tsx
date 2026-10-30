@@ -778,6 +778,35 @@ export default function FinanceiroSimplesApp() {
     await pushToSheets({ action: 'update', transaction: updated }, updatedList);
   }
 
+  // Move a purchase to Credit Card (Next Month + Pendente so it doesn't charge current month's balance)
+  async function handleMoveToCreditNextMonth(tx: Transaction) {
+    const nextMonth = shiftMonth(tx.mesAno, 1);
+    const nextDate = `${nextMonth}-${tx.data.slice(8, 10) || '10'}`;
+    const cleanDesc = tx.descricao.startsWith('💳')
+      ? tx.descricao
+      : `💳 ${tx.descricao}`;
+    const updated: Transaction = {
+      ...tx,
+      mesAno: nextMonth,
+      vencimento: nextDate,
+      status: 'Pendente',
+      formaPagamento: 'Cartão de Crédito',
+      categoria: 'Cartão / Parcelas',
+      descricao: cleanDesc,
+    };
+    const updatedList = transactions.map((t) =>
+      t.id === tx.id ? updated : t
+    );
+    setTransactions(updatedList);
+    setBannerNotice(
+      `"${tx.descricao}" foi jogada para ${formatMonthLabel(
+        nextMonth
+      )} como Crédito (Pendente) e não desconta do saldo deste mês!`
+    );
+    setTimeout(() => setBannerNotice(null), 5000);
+    await pushToSheets({ action: 'update', transaction: updated }, updatedList);
+  }
+
   async function handleDelete(id: string) {
     const updatedList = transactions.filter((t) => t.id !== id);
     const nextDeleted = [...deletedIds, id];
@@ -1503,6 +1532,18 @@ export default function FinanceiroSimplesApp() {
                           </option>
                         ))}
                       </select>
+                    )}
+
+                    {/* Botão 1-clique para jogar compra no Cartão de Crédito para o próximo mês (Pendente) */}
+                    {tx.tipo === 'Saída' && (
+                      <button
+                        type="button"
+                        onClick={() => handleMoveToCreditNextMonth(tx)}
+                        className="inline-flex items-center gap-1 px-2 py-1 rounded-md text-[11px] font-semibold bg-purple-500/15 text-purple-300 border border-purple-500/30 hover:bg-purple-500/25 cursor-pointer transition"
+                        title="Foi no Cartão de Crédito? Clique para jogar para a fatura do próximo mês (Pendente)"
+                      >
+                        <span>💳 Crédito (+1 mês)</span>
+                      </button>
                     )}
 
                     <button
