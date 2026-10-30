@@ -167,15 +167,19 @@ export default function FinanceiroSimplesApp() {
   const [notifBanco, setNotifBanco] = useState<'Nubank' | 'PicPay'>('Nubank');
   const [notifTexto, setNotifTexto] = useState('');
 
-  // Load saved real data from localStorage
+  // Load saved real data from localStorage AND sync with shared Cloud Store
   useEffect(() => {
+    let localList: Transaction[] = [];
     try {
       localStorage.removeItem('fincontrol_transactions_v1');
 
       const saved = localStorage.getItem(STORAGE_KEYS.TRANSACTIONS);
       if (saved) {
         const parsed = JSON.parse(saved);
-        if (Array.isArray(parsed)) setTransactions(parsed);
+        if (Array.isArray(parsed)) {
+          localList = parsed;
+          setTransactions(parsed);
+        }
       }
       const savedSet = localStorage.getItem(STORAGE_KEYS.SETTINGS);
       if (savedSet) {
@@ -184,6 +188,58 @@ export default function FinanceiroSimplesApp() {
     } catch (e) {
       console.error(e);
     }
+
+    // Automatically merge local device data with Cloud Store so PC and Phone stay in sync
+    async function syncWithCloudOnStart() {
+      try {
+        setIsSyncing(true);
+        const res = await fetch('/api/sheets', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            action: 'merge',
+            transactions: localList,
+          }),
+        });
+        const json = await res.json();
+        if (json.ok && Array.isArray(json.transactions)) {
+          setTransactions(json.transactions);
+          if (json.appsScriptUrl) {
+            setSyncSettings((prev) => ({
+              ...prev,
+              appsScriptUrl: json.appsScriptUrl,
+              lastSyncAt: json.updatedAt || new Date().toISOString(),
+            }));
+          }
+        }
+      } catch (e) {
+        console.error(e);
+      } finally {
+        setIsSyncing(false);
+      }
+    }
+
+    syncWithCloudOnStart();
+
+    const handleVisibilityOrFocus = () => {
+      if (document.visibilityState === 'visible') {
+        fetch('/api/sheets')
+          .then((r) => r.json())
+          .then((json) => {
+            if (json.ok && Array.isArray(json.transactions)) {
+              setTransactions(json.transactions);
+            }
+          })
+          .catch(() => {});
+      }
+    };
+
+    window.addEventListener('focus', handleVisibilityOrFocus);
+    document.addEventListener('visibilitychange', handleVisibilityOrFocus);
+    return () => {
+      window.removeEventListener('focus', handleVisibilityOrFocus);
+      document.removeEventListener('visibilitychange', handleVisibilityOrFocus);
+    };
   }, []);
 
   useEffect(() => {
@@ -206,7 +262,6 @@ export default function FinanceiroSimplesApp() {
   }, [syncSettings]);
 
   async function pushToSheets(payload: Record<string, unknown>) {
-    if (!syncSettings.appsScriptUrl) return false;
     try {
       setIsSyncing(true);
       const res = await fetch('/api/sheets', {
@@ -219,6 +274,9 @@ export default function FinanceiroSimplesApp() {
       });
       const json = await res.json();
       if (json.ok) {
+        if (Array.isArray(json.transactions)) {
+          setTransactions(json.transactions);
+        }
         setSyncSettings((prev) => ({
           ...prev,
           lastSyncAt: new Date().toISOString(),
@@ -234,18 +292,15 @@ export default function FinanceiroSimplesApp() {
   }
 
   async function pullFromSheets() {
-    if (!syncSettings.appsScriptUrl) {
-      setIsSyncModalOpen(true);
-      return;
-    }
     try {
       setIsSyncing(true);
-      setSyncMsg('Carregando da planilha...');
-      const res = await fetch(
-        `/api/sheets?scriptUrl=${encodeURIComponent(
-          syncSettings.appsScriptUrl
-        )}`
-      );
+      setSyncMsg('Sincronizando dados na nuvem...');
+      const url = syncSettings.appsScriptUrl
+        ? `/api/sheets?fromSheet=1&scriptUrl=${encodeURIComponent(
+            syncSettings.appsScriptUrl
+          )}`
+        : '/api/sheets';
+      const res = await fetch(url);
       const json = await res.json();
       if (json.ok && Array.isArray(json.transactions)) {
         const list = json.transactions.map(
@@ -257,9 +312,9 @@ export default function FinanceiroSimplesApp() {
           ...prev,
           lastSyncAt: new Date().toISOString(),
         }));
-        setSyncMsg(`Pronto! ${list.length} lançamentos carregados.`);
+        setSyncMsg(`Pronto! ${list.length} lançamentos sincronizados.`);
       } else {
-        setSyncMsg(json.error || 'Erro ao ler planilha.');
+        setSyncMsg(json.error || 'Erro ao sincronizar.');
       }
     } catch (err) {
       setSyncMsg(`Erro: ${String(err)}`);
@@ -296,9 +351,9 @@ export default function FinanceiroSimplesApp() {
     );
     setTimeout(() => setBannerNotice(null), 5000);
 
-    if (syncSettings.appsScriptUrl && uniqueNew.length > 0) {
+    if (uniqueNew.length > 0) {
       await pushToSheets({
-        action: 'syncAll',
+        action: 'merge',
         transactions: [...uniqueNew, ...transactions],
       });
     }
@@ -325,30 +380,19 @@ export default function FinanceiroSimplesApp() {
     );
     setTimeout(() => setBannerNotice(null), 5000);
 
-    if (syncSettings.appsScriptUrl) {
-      await pushToSheets({ action: 'add', transaction: tx });
-    }
+    await pushToSheets({ action: 'add', transaction: tx });
   }
 
   async function pullRecentWebhookNotifications() {
     try {
-      const res = await fetch('/api/webhook-banco');
+      const res = await fetch('/api/sheets');
       const json = await res.json();
-      if (json.ok && Array.isArray(json.recent) && json.recent.length > 0) {
-        const existingIds = new Set(transactions.map((t) => t.id));
-        const newOnes = (json.recent as Transaction[]).filter(
-          (t) => !existingIds.has(t.id)
+      if (json.ok && Array.isArray(json.transactions)) {
+        setTransactions(json.transactions);
+        setBannerNotice(
+          `Dados atualizados da nuvem (${json.transactions.length} lançamentos)!`
         );
-        if (newOnes.length > 0) {
-          setTransactions((prev) => [...newOnes, ...prev]);
-          setBannerNotice(
-            `${newOnes.length} nova(s) notificação(ões) do celular recebida(s)!`
-          );
-          setTimeout(() => setBannerNotice(null), 4000);
-        } else {
-          setBannerNotice('Nenhuma nova notificação pendente no momento.');
-          setTimeout(() => setBannerNotice(null), 3000);
-        }
+        setTimeout(() => setBannerNotice(null), 4000);
       }
     } catch {
       // ignore
@@ -383,9 +427,7 @@ export default function FinanceiroSimplesApp() {
     setDescricao('');
     setValor('');
 
-    if (syncSettings.appsScriptUrl) {
-      await pushToSheets({ action: 'add', transaction: newTx });
-    }
+    await pushToSheets({ action: 'add', transaction: newTx });
   }
 
   async function handleToggleStatus(tx: Transaction) {
@@ -396,16 +438,12 @@ export default function FinanceiroSimplesApp() {
     setTransactions((prev) =>
       prev.map((t) => (t.id === tx.id ? updated : t))
     );
-    if (syncSettings.appsScriptUrl) {
-      await pushToSheets({ action: 'update', transaction: updated });
-    }
+    await pushToSheets({ action: 'update', transaction: updated });
   }
 
   async function handleDelete(id: string) {
     setTransactions((prev) => prev.filter((t) => t.id !== id));
-    if (syncSettings.appsScriptUrl) {
-      await pushToSheets({ action: 'delete', id });
-    }
+    await pushToSheets({ action: 'delete', id });
   }
 
   const monthTransactions = useMemo(() => {

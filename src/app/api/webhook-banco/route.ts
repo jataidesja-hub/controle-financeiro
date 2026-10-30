@@ -1,9 +1,6 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { parseBankNotificationText } from '@/utils/bankParsers';
-import { Transaction } from '@/types/finance';
-
-// Recent webhook transactions buffer (for quick pull in browser session)
-const recentWebhookTransactions: Transaction[] = [];
+import { getCloudState, saveCloudState } from '@/utils/cloudStore';
 
 async function processNotification(params: {
   texto: string;
@@ -22,13 +19,18 @@ async function processNotification(params: {
     );
   }
 
-  recentWebhookTransactions.unshift(tx);
-  if (recentWebhookTransactions.length > 50) {
-    recentWebhookTransactions.pop();
-  }
+  // Persist immediately in shared Cloud State so both Computador and Celular see it
+  const state = await getCloudState();
+  state.transactions = [
+    tx,
+    ...state.transactions.filter((t) => t.id !== tx.id),
+  ];
+  const saved = await saveCloudState(state);
 
   const targetScriptUrl =
-    params.scriptUrl || process.env.NEXT_PUBLIC_APPS_SCRIPT_URL;
+    params.scriptUrl ||
+    saved.appsScriptUrl ||
+    process.env.NEXT_PUBLIC_APPS_SCRIPT_URL;
   let syncedToSheet = false;
 
   if (targetScriptUrl) {
@@ -49,6 +51,7 @@ async function processNotification(params: {
     ok: true,
     syncedToSheet,
     transaction: tx,
+    totalTransactions: saved.transactions.length,
   });
 }
 
@@ -59,9 +62,10 @@ export async function GET(request: NextRequest) {
   const scriptUrl = searchParams.get('scriptUrl') || undefined;
 
   if (!texto) {
+    const state = await getCloudState();
     return NextResponse.json({
       ok: true,
-      recent: recentWebhookTransactions,
+      recent: state.transactions,
     });
   }
 
